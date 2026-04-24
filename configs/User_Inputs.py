@@ -12,7 +12,7 @@ import os
 # OUTPUT LOCATION ##########################################################################
 
 # Base directory where all output folders will be created.
-base_output_dir = r"D:\LANOT\Proyectos\LANOT_AIRCentre\POS2IDON\outputs\RF_Model_MARIDA"
+base_output_dir = "/data/tmp/POS2IDON/output/RF_Model_MARIDA"
 
 # Short name identifying the region of interest (used in folder names when search_by = "roi").
 zone_name = "TUL"

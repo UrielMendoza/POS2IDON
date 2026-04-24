@@ -4,6 +4,7 @@ configs/fetchLandsatSentinelFromGoogleCloud-master/*
 configs/MLmodels/*
 !configs/MLmodels/RF_Model_Example_MARIDA/RF_Model_Example_MARIDA.txt
 configs/Environments/.env
+configs/Environments/.txt
 configs/.stamps
 configs/*.csv
 configs/*.sqlite
@@ -205,8 +206,5 @@ Thumbs.db
 
 # Ignore temporary backup files
 **/~$*
-
-#  Igoner the Environments folder, because it contains the .env file, which is confidential.
-configs/Environments/
 
 # End of https://www.toptal.com/developers/gitignore/api/macos,python,dotenv
