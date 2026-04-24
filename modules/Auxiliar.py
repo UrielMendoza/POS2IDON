@@ -35,8 +35,27 @@ def input_checker():
     from configs.User_Inputs import classification, classification_options
     from configs.User_Inputs import delete
     from configs.User_Inputs import s2l1c_products_folder, ac_products_folder, masked_products_folder, classification_products_folder
-    
+    try:
+        from configs.User_Inputs import search_by, tiles
+    except ImportError:
+        search_by = "roi"
+        tiles = []
+
     inputs_flag = 1
+
+    if isinstance(search_by, str) and search_by in ("roi", "tile"):
+        inputs_flag = inputs_flag*1
+    else:
+        inputs_flag = inputs_flag*0
+        log_list.append("'search_by' must be 'roi' or 'tile'.")
+
+    if search_by == "tile":
+        if isinstance(tiles, list) and len(tiles) > 0 and all(isinstance(t, str) for t in tiles):
+            inputs_flag = inputs_flag*1
+        else:
+            inputs_flag = inputs_flag*0
+            log_list.append("'tiles' must be a non-empty list of strings when search_by='tile'.")
+
     if isinstance(search, bool):
         inputs_flag = inputs_flag*1
     else:
@@ -63,7 +82,9 @@ def input_checker():
         inputs_flag = inputs_flag*0
         log_list.append("'service_options' is not dictionary.")
 
-    if isinstance(roi, dict):
+    if search_by == "tile":
+        inputs_flag = inputs_flag*1  # roi not required in tile mode
+    elif isinstance(roi, dict):
         if len(roi) == 2:
             if (roi["type"]=="Polygon") and isinstance(roi["coordinates"], list):
                 inputs_flag = inputs_flag*1
@@ -234,7 +255,7 @@ def git_clone_acolite_fels(save_dir):
     log_list = []
 
     # ZIP urls
-    acolite_zip_url = "https://github.com/acolite/acolite/archive/refs/tags/20231023.0.zip"
+    acolite_zip_url = "https://github.com/acolite/acolite/archive/refs/tags/20251013.0.zip"
     acolite_name = "acolite-main"
     fels_zip_url = "https://github.com/EmanuelCastanho/fetchLandsatSentinelFromGoogleCloud/archive/master.zip"
     fels_name = "fetchLandsatSentinelFromGoogleCloud-master"

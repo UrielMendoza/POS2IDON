@@ -15,14 +15,21 @@ import pickle as pkl
 from osgeo import gdal
 import rasterio as rio
 import xgboost as xgb
-from hummingbird.ml import load
-#import cv2 # Solves problem of segmentation fault when importing torch?
-import torch
-import torchvision.transforms as transforms
+try:
+    from hummingbird.ml import load
+    #import cv2 # Solves problem of segmentation fault when importing torch?
+    import torch
+    import torchvision.transforms as transforms
+    torch_available = True
+except Exception:
+    torch_available = False
 import time
 
 ### Import Defined Functions ###########################################################################################
-from modules.unet import UNet
+try:
+    from modules.unet import UNet
+except Exception:
+    pass
 from modules.Auxiliar import CreateBrandNewFolder
 
 ########################################################################################################################

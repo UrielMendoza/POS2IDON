@@ -110,16 +110,28 @@ def collect_s2l1c_cdse(roi, sensing_period, output_folder):
         end_date_in = datetime.strptime(sensing_period[1], "%Y%m%d") + timedelta(days=1)
         end_date = end_date_in.strftime("%Y-%m-%d")
 
-    # Search products
+    # Search products using CDSE OData API (OpenSearch requires auth since 2025)
     try:
-        features = query_features("Sentinel2", {"geometry": polygon, "startDate": start_date, "completionDate": end_date, "processingLevel": "S2MSI1C"})
+        import requests as _requests
+        odata_url = (
+            "https://catalogue.dataspace.copernicus.eu/odata/v1/Products"
+            f"?$filter=Collection/Name eq 'SENTINEL-2'"
+            f" and contains(Name,'MSIL1C')"
+            f" and OData.CSC.Intersects(area=geography'SRID=4326;{polygon}')"
+            f" and ContentDate/Start gt {start_date}T00:00:00.000Z"
+            f" and ContentDate/Start lt {end_date}T00:00:00.000Z"
+            f"&$orderby=ContentDate/Start desc&$top=100"
+        )
+        resp = _requests.get(odata_url, timeout=30)
+        resp.raise_for_status()
+        items = resp.json().get("value", [])
         products_list = []
-        for feature in features:
-            safe_name = feature.get("properties").get("title")
-            url = feature.get("properties").get("services").get("download").get("url")
+        for item in items:
+            safe_name = item.get("Name", "")
+            product_id = item.get("Id", "")
+            url = f"https://download.dataspace.copernicus.eu/odata/v1/Products({product_id})/$value"
             url_safe = url + '/' + safe_name
             products_list.append(url_safe)
-        # Number of products available
         products_number = len(products_list)
         log_list.append(str(products_number) + " download links collected:\n" + "\n".join(products_list) + "\n")
     except Exception as e:
@@ -152,39 +164,104 @@ def download_s2l1c_cdse(cdse_user, cdse_pass, url_safe, output_folder):
     url = url_safe.replace("/"+safe_name,"")
     product_path = os.path.join(output_folder, safe_name[:-4]+"zip")
 
-    try:
-        # Init session with credentials
-        credentials = Credentials(cdse_user, cdse_pass)
-        session = credentials.get_session()
+    max_retries = 10
+    chunk_size = 1024 * 512  # 512 KB chunks
+    for attempt in range(max_retries):
+        try:
+            # Init session with credentials (refresh token on each retry)
+            credentials = Credentials(cdse_user, cdse_pass)
+            session = credentials.get_session()
 
-        # Source: CDSETool
-        response = session.head(url, allow_redirects=False)
-        while response.status_code in range(300, 400):
-            url = response.headers["Location"]
+            # Follow redirects via HEAD
             response = session.head(url, allow_redirects=False)
+            while response.status_code in range(300, 400):
+                url = response.headers["Location"]
+                response = session.head(url, allow_redirects=False)
 
-        response = session.get(url, stream=True)
-        while response.status_code != 200:
-            time.sleep(5)
-            response = session.get(url, stream=True)
+            # Resume support: check already downloaded bytes
+            downloaded = os.path.getsize(product_path) if os.path.exists(product_path) else 0
+            headers = {"Range": f"bytes={downloaded}-"} if downloaded > 0 else {}
 
-        # Download
-        content_length = int(response.headers["Content-Length"])
-        chunk_size = 1024
-        with open(product_path, "wb") as file:
-            with tqdm(total=content_length, unit='B', unit_scale=True) as pbar:
-                for data in response.iter_content(chunk_size):
-                    pbar.update(len(data))
-                    file.write(data)
+            response = session.get(url, stream=True, headers=headers)
+            while response.status_code not in (200, 206):
+                time.sleep(5)
+                response = session.get(url, stream=True, headers=headers)
 
-        # Unzip
-        if os.path.exists(product_path):
-            with zipfile.ZipFile(product_path) as product_zip:
-                product_zip.extractall(output_folder)
-            # Delete zip
-            os.remove(product_path)
+            content_length = int(response.headers.get("Content-Length", 0)) + downloaded
+
+            with open(product_path, "ab" if downloaded > 0 else "wb") as file:
+                with tqdm(total=content_length, initial=downloaded, unit='B', unit_scale=True) as pbar:
+                    for data in response.iter_content(chunk_size):
+                        pbar.update(len(data))
+                        file.write(data)
+
+            # Unzip
+            if os.path.exists(product_path):
+                with zipfile.ZipFile(product_path) as product_zip:
+                    product_zip.extractall(output_folder)
+                os.remove(product_path)
+            break  # Success
+
+        except Exception as e:
+            log_list.append(f"Download attempt {attempt+1}/{max_retries} failed: {str(e)}")
+            if attempt < max_retries - 1:
+                time.sleep(15)
+            else:
+                log_list.append("Unable to download after all retries.")
+
+    return log_list
+
+#######################################################################################################################################
+def collect_s2l1c_cdse_by_tile(tile_id, sensing_period, output_folder):
+    """
+    Searches Sentinel-2 Level-1C products for a specific tile ID using the CDSE OData API.
+    No ROI polygon needed — the tile ID is used directly as the search filter.
+    Input:  tile_id - Sentinel-2 tile ID string without "T" prefix (e.g. "16QDH").
+            sensing_period - StartDate and EndDate as ('YYYYMMDD','YYYYMMDD').
+            output_folder - Folder where the URL list will be saved. String.
+    Output: S2L1CProducts_URLs.txt file.
+            log_list - Logging messages.
+    """
+    log_list = []
+
+    start_date_in = datetime.strptime(sensing_period[0], "%Y%m%d")
+    start_date = start_date_in.strftime("%Y-%m-%d")
+    end_date_in = datetime.strptime(sensing_period[1], "%Y%m%d")
+    end_date = end_date_in.strftime("%Y-%m-%d")
+    if start_date == end_date:
+        end_date_in = end_date_in + timedelta(days=1)
+        end_date = end_date_in.strftime("%Y-%m-%d")
+
+    try:
+        import requests as _requests
+        tile_filter = f"T{tile_id}" if not tile_id.startswith("T") else tile_id
+        odata_url = (
+            "https://catalogue.dataspace.copernicus.eu/odata/v1/Products"
+            f"?$filter=Collection/Name eq 'SENTINEL-2'"
+            f" and contains(Name,'MSIL1C')"
+            f" and contains(Name,'{tile_filter}')"
+            f" and ContentDate/Start gt {start_date}T00:00:00.000Z"
+            f" and ContentDate/Start lt {end_date}T00:00:00.000Z"
+            f"&$orderby=ContentDate/Start desc&$top=100"
+        )
+        resp = _requests.get(odata_url, timeout=30)
+        resp.raise_for_status()
+        items = resp.json().get("value", [])
+        products_list = []
+        for item in items:
+            safe_name = item.get("Name", "")
+            product_id = item.get("Id", "")
+            url = f"https://download.dataspace.copernicus.eu/odata/v1/Products({product_id})/$value"
+            url_safe = url + '/' + safe_name
+            products_list.append(url_safe)
+        log_list.append(f"{len(products_list)} download links collected for tile {tile_id}:\n" + "\n".join(products_list) + "\n")
     except Exception as e:
-        log_list.append("Unable to download: " + str(e))
+        products_list = []
+        log_list.append(f"No products available for tile {tile_id}: " + str(e))
+
+    text_file = open(os.path.join(output_folder, "S2L1CProducts_URLs.txt"), "wt")
+    text_file.write('\n'.join(products_list) + "\n")
+    text_file.close()
 
     return log_list
 
@@ -209,12 +286,13 @@ def ACacolite(FilesToAC, OutputFolder, EDuser, EDpass, ROI):
     # Add EARTH DATA credentials (using them or not is not making significant differences)
     settings['EARTHDATA_u'] = EDuser
     settings['EARTHDATA_p'] = EDpass
-    # Clip input image to a ROI
-    S = ROI['coordinates'][0][0][1]
-    W = ROI['coordinates'][0][0][0]
-    N = ROI['coordinates'][0][2][1]
-    E = ROI['coordinates'][0][2][0]
-    settings['limit'] = S, W, N, E
+    # Clip input image to a ROI (skipped when ROI is None, i.e. full tile processing)
+    if ROI is not None:
+        S = ROI['coordinates'][0][0][1]
+        W = ROI['coordinates'][0][0][0]
+        N = ROI['coordinates'][0][2][1]
+        E = ROI['coordinates'][0][2][0]
+        settings['limit'] = S, W, N, E
     # Dark Spectrum Fitting options: 
     # Aerosol correction (fixed/tiled is default)
     settings['dsf_aot_estimate'] = 'tiled'
@@ -222,9 +300,8 @@ def ACacolite(FilesToAC, OutputFolder, EDuser, EDpass, ROI):
     settings['dsf_residual_glint_correction'] = True
     settings['dsf_residual_glint_correction_method'] = 'default'
     # Calculate Top of Atmosphere, Surface Reflectance and Rayleigh reflectance (as in MARIDA values from L2W files)
-    RayBands = ['rhorc_442','rhorc_443','rhorc_492','rhorc_559','rhorc_560','rhorc_665','rhorc_704','rhorc_739','rhorc_740','rhorc_780','rhorc_783','rhorc_833','rhorc_864','rhorc_865','rhorc_1610','rhorc_1614','rhorc_2186','rhorc_2202']
-    SurBands = ['rhos_442','rhos_443','rhos_492','rhos_559','rhos_560','rhos_665','rhos_704','rhos_739','rhos_740','rhos_780','rhos_783','rhos_833','rhos_864','rhos_865','rhos_1610','rhos_1614','rhos_2186','rhos_2202']
-    settings['l2w_parameters'] = ['rhot_*'] + SurBands + RayBands
+    # Using wildcards to support S2A, S2B and S2C (which has different centre wavelengths)
+    settings['l2w_parameters'] = ['rhot_*', 'rhos_*', 'rhorc_*']
     # Control default produced outputs in output folder (currently set to obtain only the .tif for each atm.corrected band + pngs)
     # Produce RGB / L2W maps in output folder
     settings['rgb_rhot'] = True
@@ -299,20 +376,55 @@ def CleanAndOrganizeACOLITE(AcoliteFolder, S2L1CproductsFolder, SAFEFileName):
 
             # Rename bands files inside each folder
             ACOLITEProductFolder = os.path.join(AcoliteFolder, ACOLITEProductFolderName)  
-            # Associate bands wavelengths (keys) with IDs (values). Valid for S2A and S2B
-            BandsWlsToIds = {'rhorc_442':'B01','rhorc_443':'B01','rhos_442':'rhos_B01','rhos_443':'rhos_B01','rhot_442':'rhot_B01','rhot_443':'rhot_B01',
-                             'rhorc_492':'B02','rhos_492':'rhos_B02','rhot_492':'rhot_B02',
-                             'rhorc_559':'B03','rhorc_560':'B03','rhos_559':'rhos_B03','rhos_560':'rhos_B03','rhot_559':'rhot_B03','rhot_560':'rhot_B03',
-                             'rhorc_665':'B04','rhos_665':'rhos_B04','rhot_665':'rhot_B04',
-                             'rhorc_704':'B05','rhos_704':'rhos_B05','rhot_704':'rhot_B05',
-                             'rhorc_739':'B06','rhorc_740':'B06','rhos_739':'rhos_B06','rhos_740':'rhos_B06','rhot_739':'rhot_B06','rhot_740':'rhot_B06',
-                             'rhorc_780':'B07','rhorc_783':'B07','rhos_780':'rhos_B07','rhos_783':'rhos_B07','rhot_780':'rhot_B07','rhot_783':'rhot_B07',
-                             'rhorc_833':'B08','rhos_833':'rhos_B08','rhot_833':'rhot_B08',
-                             'rhorc_864':'B8A','rhorc_865':'B8A','rhos_864':'rhos_B8A','rhos_865':'rhos_B8A','rhot_864':'rhot_B8A','rhot_865':'rhot_B8A',
-                             'rhot_945':'rhot_B09','rhot_943':'rhot_B09',
-                             'rhot_1373':'rhot_B10','rhot_1377':'rhot_B10',
-                             'rhorc_1610':'B11','rhorc_1614':'B11','rhos_1610':'rhos_B11','rhos_1614':'rhos_B11','rhot_1610':'rhot_B11','rhot_1614':'rhot_B11',
-                             'rhorc_2186':'B12','rhorc_2202':'B12','rhos_2186':'rhos_B12','rhos_2202':'rhos_B12','rhot_2186':'rhot_B12','rhot_2202':'rhot_B12'}
+            # Associate bands wavelengths (keys) with IDs (values). Valid for S2A, S2B and S2C
+            BandsWlsToIds = {# B01 - S2A:442, S2B:443, S2C:444
+                             'rhorc_442':'B01','rhorc_443':'B01','rhorc_444':'B01',
+                             'rhos_442':'rhos_B01','rhos_443':'rhos_B01','rhos_444':'rhos_B01',
+                             'rhot_442':'rhot_B01','rhot_443':'rhot_B01','rhot_444':'rhot_B01',
+                             # B02 - S2A/B:492, S2C:489
+                             'rhorc_492':'B02','rhorc_489':'B02',
+                             'rhos_492':'rhos_B02','rhos_489':'rhos_B02',
+                             'rhot_492':'rhot_B02','rhot_489':'rhot_B02',
+                             # B03 - S2A:560, S2B:559, S2C:561
+                             'rhorc_559':'B03','rhorc_560':'B03','rhorc_561':'B03',
+                             'rhos_559':'rhos_B03','rhos_560':'rhos_B03','rhos_561':'rhos_B03',
+                             'rhot_559':'rhot_B03','rhot_560':'rhot_B03','rhot_561':'rhot_B03',
+                             # B04 - S2A/B:665, S2C:667
+                             'rhorc_665':'B04','rhorc_667':'B04',
+                             'rhos_665':'rhos_B04','rhos_667':'rhos_B04',
+                             'rhot_665':'rhot_B04','rhot_667':'rhot_B04',
+                             # B05 - S2A/B:704, S2C:707
+                             'rhorc_704':'B05','rhorc_707':'B05',
+                             'rhos_704':'rhos_B05','rhos_707':'rhos_B05',
+                             'rhot_704':'rhot_B05','rhot_707':'rhot_B05',
+                             # B06 - S2A:740, S2B:739, S2C:741
+                             'rhorc_739':'B06','rhorc_740':'B06','rhorc_741':'B06',
+                             'rhos_739':'rhos_B06','rhos_740':'rhos_B06','rhos_741':'rhos_B06',
+                             'rhot_739':'rhot_B06','rhot_740':'rhot_B06','rhot_741':'rhot_B06',
+                             # B07 - S2A:783, S2B:780, S2C:785
+                             'rhorc_780':'B07','rhorc_783':'B07','rhorc_785':'B07',
+                             'rhos_780':'rhos_B07','rhos_783':'rhos_B07','rhos_785':'rhos_B07',
+                             'rhot_780':'rhot_B07','rhot_783':'rhot_B07','rhot_785':'rhot_B07',
+                             # B08 - S2A/B:833, S2C:835
+                             'rhorc_833':'B08','rhorc_835':'B08',
+                             'rhos_833':'rhos_B08','rhos_835':'rhos_B08',
+                             'rhot_833':'rhot_B08','rhot_835':'rhot_B08',
+                             # B8A - S2A:865, S2B:864, S2C:866
+                             'rhorc_864':'B8A','rhorc_865':'B8A','rhorc_866':'B8A',
+                             'rhos_864':'rhos_B8A','rhos_865':'rhos_B8A','rhos_866':'rhos_B8A',
+                             'rhot_864':'rhot_B8A','rhot_865':'rhot_B8A','rhot_866':'rhot_B8A',
+                             # B09 - S2A:945, S2B:943, S2C:947
+                             'rhot_945':'rhot_B09','rhot_943':'rhot_B09','rhot_947':'rhot_B09',
+                             # B10 - S2A:1373, S2B:1377, S2C:1372
+                             'rhot_1373':'rhot_B10','rhot_1377':'rhot_B10','rhot_1372':'rhot_B10',
+                             # B11 - S2A:1614, S2B:1610, S2C:1612
+                             'rhorc_1610':'B11','rhorc_1614':'B11','rhorc_1612':'B11',
+                             'rhos_1610':'rhos_B11','rhos_1614':'rhos_B11','rhos_1612':'rhos_B11',
+                             'rhot_1610':'rhot_B11','rhot_1614':'rhot_B11','rhot_1612':'rhot_B11',
+                             # B12 - S2A:2202, S2B:2186, S2C:2191
+                             'rhorc_2186':'B12','rhorc_2202':'B12','rhorc_2191':'B12',
+                             'rhos_2186':'rhos_B12','rhos_2202':'rhos_B12','rhos_2191':'rhos_B12',
+                             'rhot_2186':'rhot_B12','rhot_2202':'rhot_B12','rhot_2191':'rhot_B12'}
             
             # Change name of each ACOLITE band
             for ACOLITEfilePath in glob.glob(os.path.join(ACOLITEProductFolder, "*")):

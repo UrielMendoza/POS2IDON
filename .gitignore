@@ -206,5 +206,7 @@ Thumbs.db
 # Ignore temporary backup files
 **/~$*
 
+#  Igoner the Environments folder, because it contains the .env file, which is confidential.
+configs/Environments/
 
 # End of https://www.toptal.com/developers/gitignore/api/macos,python,dotenv

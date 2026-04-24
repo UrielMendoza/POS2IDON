@@ -7,9 +7,37 @@ Credentials must be modified in the hidden .env file.
 @author: AIR Centre
 """
 
+import os
+
+# OUTPUT LOCATION ##########################################################################
+
+# Base directory where all output folders will be created.
+base_output_dir = r"D:\LANOT\Proyectos\LANOT_AIRCentre\POS2IDON\outputs\RF_Model_MARIDA"
+
+# Short name identifying the region of interest (used in folder names when search_by = "roi").
+zone_name = "TUL"
+
+# SEARCH MODE ##############################################################################
+
+# Search mode:
+# "roi" - Search using a polygon region of interest (roi variable below).
+#         Folder names use zone_name. Full pipeline clips to the ROI extent.
+# "tile" - Search by Sentinel-2 tile ID(s) (tiles variable below).
+#          Each tile is processed independently. Full tile is processed (no ROI clipping).
+#          Folder names use the tile ID. Only CDSE service is supported in this mode.
+# Other inputs besides string will stop the pré-start.
+search_by = "tile"
+
+# List of Sentinel-2 tile IDs to process (used when search_by = "tile").
+# Each tile generates its own set of output folders and is processed independently.
+# Other inputs besides non-empty list of strings will stop the pré-start.
+tiles = ["16QDJ","16QEJ","16QDH","16QEH","16QDG","16QEG","16QDF","16QEF",
+         "16QCF","16QCE","16QDE","16QEE","16QCD","16QDD","16QED",
+         "16PCC","16PDC","16PEC"]
+
 # SEARCH ###################################################################################
 
-# Query Sentinel-2 L1C Products in the services catalogue and creates a list of products 
+# Query Sentinel-2 L1C Products in the services catalogue and creates a list of products
 # that will be saved inside s2l1c_products_folder.
 # If False, this step will be ignored and the products list must exist inside s2l1c_products_folder
 # for the download to work.
@@ -17,36 +45,43 @@ Credentials must be modified in the hidden .env file.
 search = True
 
 # Search service:
-# "GC" (Google Cloud - better for old data and long term application).
+# "GC" (Google Cloud - better for old data and long term application). Not supported for search_by="tile".
 # "CDSE" (Copernicus Data Space Ecosystem - better for recent data and near real time application).
 # Other inputs besides string will stop the pré-start.
 # Other strings will be considered as "CDSE".
-service = "GC"
+service = "CDSE"
 
-# Search service options:
+# Search service options (used when search_by = "roi"):
 # Other inputs besides dictionary with correct values will stop the pré-start.
-                   # Filter specific combination from the S2L1CProducts_URLs.txt, 
+                   # Filter specific combination from the S2L1CProducts_URLs.txt,
                    # e.g. "T31UDU", "R094_T31UDU" or "R094"
                    # String, use "" to ignore.
-service_options = {"filter": ""} 
 
-# Region Of Interest (ROI): 
-# SentinelHub EOBrowser (https://apps.sentinel-hub.com/eo-browser/) format. 
-# Also used by ACOLITE. If ROI has limits outside the product, ACOLITE will ignore.
-# Other inputs besides dictionary with correct values will stop the pré-start.
-roi = {"type":"Polygon","coordinates":[[[-88.308792,15.660726],[-88.308792,15.928978],[-88.040314,15.928978],[-88.040314,15.660726],[-88.308792,15.660726]]]}
+# --- PRUEBA 1: Gulf of Honduras - Marine Debris (18 Sep 2020) ---
+# service_options = {"filter": ""}
+# roi = {"type":"Polygon","coordinates":[[[-88.308792,15.660726],[-88.308792,15.928978],[-88.040314,15.928978],[-88.040314,15.660726],[-88.308792,15.660726]]]}
+# sensing_period = ('20200917', '20200919')
+
+# --- PRUEBA 2: Playa del Carmen, Mexico - Tile 16QDH (10 Apr 2026) ---
+# service_options = {"filter": "T16QDH"}
+# roi = {"type":"Polygon","coordinates":[[[-87.15,20.50],[-87.15,20.75],[-86.95,20.75],[-86.95,20.50],[-87.15,20.50]]]}
+# sensing_period = ('20260410', '20260411')
+
+# --- PRUEBA 3: Playa del Carmen, Mexico - Tile 16QDH (06 Nov 2025) ---
+# service_options = {"filter": "T16QDH"}
+# roi = {"type":"Polygon","coordinates":[[[-87.15,20.50],[-87.15,20.75],[-86.95,20.75],[-86.95,20.50],[-87.15,20.50]]]}
+# sensing_period = ('20251106', '20251107')
+
+# --- PRUEBA 4: Tulum, Mexico - extendido al mar Caribe - Tile 16QDH (06 Nov 2025) ---
+service_options = {"filter": "T16QDH"}
+roi = {"type":"Polygon","coordinates":[[[-87.60,19.90],[-87.60,20.45],[-86.70,20.45],[-86.70,19.90],[-87.60,19.90]]]}
+sensing_period = ('20180427', '20180427')
 
 # Near real time sensing period:
-# Uses yesterday as start date and today as end date. 
+# Uses yesterday as start date and today as end date.
 # sensing_period is ignored.
 # Other inputs besides bool will stop the pré-start.
 nrt_sensing_period = False
-
-# Sensing period of interest:
-# Used only if nrt_sensing_period = False.
-# (StartDate, EndDate).
-# Other inputs besides tuple with correct values will stop the pré-start.
-sensing_period = ('20200917', '20200919')
 
 # PROCESSING ###############################################################################
 
@@ -89,7 +124,7 @@ masking = True
 # "cloud_mask": False
                    # Use existing ESA WorldCover Tiles that are inside 2-1_ESA_Worldcover to create water mask.
                    # If False, it will download the tiles.
-masking_options = {"use_existing_ESAwc": False,  
+masking_options = {"use_existing_ESAwc": False,
                    # Buffer size applied to land, 0 to ignore.
                    "land_buffer": 0, # 50
                    # Apply mask based on 'NDWI' or 'BAND8' (features), None to ignore.
@@ -175,20 +210,20 @@ delete = {"original_products": False, # True
 # Download folder:
 # Folder where the URLs file and downloaded S2L1C products will be saved.
 # Other inputs besides string will stop the pré-start.
-s2l1c_products_folder = "0_S2L1C_Products"
+s2l1c_products_folder = os.path.join(base_output_dir, f"0_S2L1C_Products_{zone_name}_{sensing_period[0]}")
 
 # Atmospheric correction folder:
-# Folder where the S2 atmospherically corrected bands will be saved. 
+# Folder where the S2 atmospherically corrected bands will be saved.
 # Other inputs besides string will stop the pré-start.
-ac_products_folder = "1_Atmospheric_Corrected_Products"
+ac_products_folder = os.path.join(base_output_dir, f"1_Atmospheric_Corrected_Products_{zone_name}_{sensing_period[0]}")
 
 # Masking folder:
 # Folder where the masked products will be saved. The water, features and cloud masks will also
 # be saved in this folder.
 # Other inputs besides string will stop the pré-start.
-masked_products_folder = "2_Masked_Products"
+masked_products_folder = os.path.join(base_output_dir, f"2_Masked_Products_{zone_name}_{sensing_period[0]}")
 
 # Classification folder:
 # Folder where the final classification results will be saved.
 # Other inputs besides string will stop the pré-start.
-classification_products_folder = "3_Classification_Results"
+classification_products_folder = os.path.join(base_output_dir, f"3_Classification_Results_{zone_name}_{sensing_period[0]}")
