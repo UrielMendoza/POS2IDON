@@ -299,13 +299,15 @@ def ACacolite(FilesToAC, OutputFolder, EDuser, EDpass, ROI):
     # Residual Glint correction  (False is default) (if True: Default or Alternative (only possible with "fixed" option) methods)
     settings['dsf_residual_glint_correction'] = True
     settings['dsf_residual_glint_correction_method'] = 'default'
-    # Calculate Top of Atmosphere, Surface Reflectance and Rayleigh reflectance (as in MARIDA values from L2W files)
-    # Using wildcards to support S2A, S2B and S2C (which has different centre wavelengths)
-    settings['l2w_parameters'] = ['rhot_*', 'rhos_*', 'rhorc_*']
-    # Control default produced outputs in output folder (currently set to obtain only the .tif for each atm.corrected band + pngs)
-    # Produce RGB / L2W maps in output folder
-    settings['rgb_rhot'] = True
-    settings['rgb_rhos'] = True
+    # Calculate TOA (rhot) and Rayleigh-corrected (rhorc) reflectances.
+    # rhorc_* -> B01..B12 used for classification and spectral indices (required).
+    # rhot_*  -> rhot_B* used by s2cloudless cloud masking (required when cloud_mask=True).
+    # rhos_*  -> Surface Reflectance, only needed for NDWI mask (features_mask="NDWI"). Omitted to save disk and time.
+    # Using wildcards to support S2A, S2B and S2C (which have different centre wavelengths).
+    settings['l2w_parameters'] = ['rhot_*', 'rhorc_*']
+    # Disable RGB PNG generation — PNGs are deleted immediately after in CleanAndOrganizeACOLITE.
+    settings['rgb_rhot'] = False
+    settings['rgb_rhos'] = False
     # Delete NetCDFs L1R, L2R, L2W .nc files in output folder
     settings['l1r_delete_netcdf'] = True
     settings['l2r_delete_netcdf'] = True
