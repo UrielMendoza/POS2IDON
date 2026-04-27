@@ -80,7 +80,7 @@ def Create_Mask_fromWCMaps(MaskProduct, WorldCoverMapsFolder, DstEPSG, Bounds, S
         SingleWorldCoverMap = gdal.BuildVRT("/vsimem/ESA_WorldCover_10m_Map.vrt", WorldCoverMapsSaved_list, resampleAlg=ResampleAlgorithm)
 
         # Reproject and clip this single map to desired EPSG (convert to GTiff and do this in memory). Select desired resolution and bounds.
-        SingleWorldCoverMapClipped = gdal.Warp("/vsimem/ESA_WorldCover_10m_Map_Reprojected.tif", SingleWorldCoverMap, format='GTiff', outputBounds=[Bounds[0], Bounds[3], Bounds[2], Bounds[1]], xRes=SpatialRes, yRes=SpatialRes, dstSRS="EPSG:"+DstEPSG, resampleAlg=ResampleAlgorithm, options=['COMPRESS=DEFLATE'])
+        SingleWorldCoverMapClipped = gdal.Warp("/vsimem/ESA_WorldCover_10m_Map_Reprojected.tif", SingleWorldCoverMap, format='GTiff', outputBounds=[Bounds[0], Bounds[3], Bounds[2], Bounds[1]], xRes=SpatialRes, yRes=SpatialRes, dstSRS="EPSG:"+DstEPSG, resampleAlg=ResampleAlgorithm, creationOptions=['COMPRESS=DEFLATE'])
 
         # Close Original World Cover Map
         #gdal.Unlink("/vsimem/ESA_WorldCover_10m_Map.vrt")
