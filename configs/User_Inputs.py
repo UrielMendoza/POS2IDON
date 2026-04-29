@@ -186,6 +186,22 @@ classification_options = {"split_and_mosaic": False,
                           }
 
 
+# PARALLELIZATION ##########################################################################
+
+# Process multiple tiles (or ROIs) in parallel using separate processes.
+# Each tile gets its own process and writes to its own log file (4_logfile_<tile>.log).
+# True - Run tiles in parallel with ProcessPoolExecutor (recommended for multi-core servers).
+# False - Run tiles sequentially (one after another).
+# Other inputs besides bool will stop the pré-start.
+parallel_processing = True
+
+# Maximum number of worker processes when parallel_processing = True.
+# None - Use all available CPU cores (os.cpu_count()).
+# Integer - Use exactly that many workers.
+# Other inputs besides None or positive int will stop the pré-start.
+parallel_max_workers = None
+
+
 # Delete processed folders and files:
 # Other inputs besides dictionary with correct values will stop the pré-start.
           # Delete original products:

@@ -221,7 +221,25 @@ def input_checker():
     else:
         inputs_flag = inputs_flag*0
         log_list.append("'classification_products_folder' is not string.")
-    
+
+    try:
+        from configs.User_Inputs import parallel_processing, parallel_max_workers
+    except ImportError:
+        parallel_processing = True
+        parallel_max_workers = None
+
+    if isinstance(parallel_processing, bool):
+        inputs_flag = inputs_flag*1
+    else:
+        inputs_flag = inputs_flag*0
+        log_list.append("'parallel_processing' is not boolean.")
+
+    if (parallel_max_workers is None) or (isinstance(parallel_max_workers, int) and parallel_max_workers > 0):
+        inputs_flag = inputs_flag*1
+    else:
+        inputs_flag = inputs_flag*0
+        log_list.append("'parallel_max_workers' must be None or positive int.")
+
     return inputs_flag, log_list
 
 ############################################################################################
