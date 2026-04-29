@@ -2,7 +2,10 @@
 configs/acolite-main/*
 configs/fetchLandsatSentinelFromGoogleCloud-master/*
 configs/MLmodels/*
+!configs/MLmodels/RF_Model_Example_MARIDA
+configs/MLmodels/RF_Model_Example_MARIDA/*
 !configs/MLmodels/RF_Model_Example_MARIDA/RF_Model_Example_MARIDA.txt
+!configs/MLmodels/RF_Model_Example_MARIDA/RF_Model_Example_MARIDA.pkl
 configs/Environments/.env
 configs/Environments/.txt
 configs/.stamps
