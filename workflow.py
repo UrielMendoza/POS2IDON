@@ -132,6 +132,17 @@ def process_tile(current_item):
     # Use 'main_logger' as the local name so the existing body keeps working
     main_logger = tile_logger
 
+    # Stage tracking: write the current stage to a status file so the parent's
+    # dashboard can read it and display real-time progress.
+    def _set_stage(stage):
+        try:
+            with open(f"4_status_{current_item}.txt", "w") as _f:
+                _f.write(f"{stage}|{int(time.time())}")
+        except Exception:
+            pass
+
+    _set_stage("STARTING")
+
     # Determine search mode and resolve folder paths (locals to avoid UnboundLocalError)
     _search_by = search_by if 'search_by' in globals() else "roi"
     if _search_by == "tile":
@@ -151,6 +162,7 @@ def process_tile(current_item):
         )
 
     # SEARCH PRODUCTS ######################################################################
+    _set_stage("SEARCHING")
     main_logger.info("SEARCH PRODUCTS")
     if search == True:
         # Create folder to store products
@@ -227,9 +239,11 @@ def process_tile(current_item):
                 safe_file_name = url.split('/')[-1]
                 safe_file_path = os.path.join(s2l1c_products_folder, safe_file_name)
                 main_logger.info("(" + str(i+1) +  "/" + str(len(urls_list)) + "): " + safe_file_name)
+                _product_label = f"{i+1}/{len(urls_list)}"
 
                 try:
                     # -> Download
+                    _set_stage(f"DOWNLOAD {_product_label}")
                     if download == True:
                         # Delete old product that might be corrupted
                         if os.path.exists(safe_file_path):
@@ -278,6 +292,7 @@ def process_tile(current_item):
 
                 try:
                     # -> Atmospheric Correction
+                    _set_stage(f"ACOLITE {_product_label}")
                     if atmospheric_correction == True:
                         if product_short_name != "NONE":
                             main_logger.info("Performing atmospheric correction with ACOLITE")
@@ -318,6 +333,7 @@ def process_tile(current_item):
 
                 try:
                     # -> Masking
+                    _set_stage(f"MASKING {_product_label}")
                     if masking == True:
                         if (product_short_name != "NONE") and (os.path.exists(os.path.join(ac_product, product_short_name+"_stack.tif"))):
                             # Only a confirmation that you are reading the right atmospheric corrected product
@@ -412,6 +428,7 @@ def process_tile(current_item):
 
                 try:
                     # -> Classification
+                    _set_stage(f"CLASSIFY {_product_label}")
                     if classification == True:
                         if (product_short_name != "NONE") and (os.path.exists(masked_product)):
                             # Only a confirmation that you are reading the right masked product
@@ -535,6 +552,8 @@ def process_tile(current_item):
     else:
         main_logger.info("Processing ignored")
 
+    _set_stage("DONE")
+
 
 ############################################################################################
 # Start POS2IDON main processing time
@@ -604,9 +623,58 @@ if pre_start_flag == 1:
             raise RuntimeError(f"exit code {proc.returncode}")
         return item
 
+    import threading
+    _dashboard_stop = threading.Event()
+    _dashboard_refresh = 30  # seconds between dashboard prints
+
+    def _read_stage(item):
+        """Read the current stage of a tile from its status file."""
+        path = f"4_status_{item}.txt"
+        if not os.path.exists(path):
+            return ("PENDING", None)
+        try:
+            with open(path) as f:
+                line = f.read().strip()
+            if "|" in line:
+                stage, ts = line.split("|", 1)
+                return (stage, int(ts))
+            return (line, None)
+        except Exception:
+            return ("?", None)
+
+    def _print_dashboard():
+        now = time.time()
+        total_elapsed = _format_elapsed(now - POS2IDON_time0)
+        lines = []
+        lines.append("")
+        lines.append(f"=== STATUS @ {time.strftime('%H:%M:%S')}  total {total_elapsed}  ({completed_count} done / {failed_count} failed of {total}) ===")
+        for idx, item in enumerate(processing_items, 1):
+            stage, stage_ts = _read_stage(item)
+            if stage_ts is not None:
+                stage_elapsed = _format_elapsed(now - stage_ts)
+            else:
+                stage_elapsed = "-"
+            lines.append(f"  [{idx:>2}/{total}] {item:6s}  {stage:18s}  {stage_elapsed}")
+        lines.append("")
+        sys.stdout.write("\n".join(lines) + "\n")
+        sys.stdout.flush()
+
+    def _dashboard_loop():
+        while not _dashboard_stop.wait(_dashboard_refresh):
+            try:
+                _print_dashboard()
+            except Exception:
+                pass
+
     if _parallel and total > 1:
         main_logger.info(f"Running {total} items in parallel with {_max_workers} workers (isolated subprocesses)")
         main_logger.info(f"Per-tile logs: 4_logfile_<tile>.log  (tail -f to follow)")
+        main_logger.info(f"Dashboard refreshes every {_dashboard_refresh}s on stdout")
+
+        # Start background dashboard thread
+        _dashboard_thread = threading.Thread(target=_dashboard_loop, daemon=True)
+        _dashboard_thread.start()
+
         with ThreadPoolExecutor(max_workers=_max_workers) as ex:
             futures = {}
             for idx, item in enumerate(processing_items, 1):
@@ -625,6 +693,20 @@ if pre_start_flag == 1:
                 except Exception as e:
                     failed_count += 1
                     main_logger.info(f"[{idx}/{total}] {item} - FAILED ({elapsed}): {e} [{completed_count} ok / {failed_count} failed]")
+
+        # Stop dashboard and print one final snapshot
+        _dashboard_stop.set()
+        _dashboard_thread.join(timeout=2)
+        _print_dashboard()
+
+        # Clean up status files
+        for item in processing_items:
+            try:
+                os.remove(f"4_status_{item}.txt")
+            except FileNotFoundError:
+                pass
+            except Exception:
+                pass
     else:
         if _parallel and total <= 1:
             main_logger.info("Only one item to process, running sequentially")
