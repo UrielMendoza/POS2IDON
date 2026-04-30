@@ -666,6 +666,9 @@ if pre_start_flag == 1:
             except Exception:
                 pass
 
+    # Per-tile result tracking for the final summary
+    tile_results = {}  # item -> {"status": "DONE"|"FAILED", "elapsed_s": float, "error": str|None}
+
     if _parallel and total > 1:
         main_logger.info(f"Running {total} items in parallel with {_max_workers} workers (isolated subprocesses)")
         main_logger.info(f"Per-tile logs: 4_logfile_<tile>.log  (tail -f to follow)")
@@ -685,13 +688,16 @@ if pre_start_flag == 1:
 
             for fut in as_completed(futures):
                 idx, item = futures[fut]
-                elapsed = _format_elapsed(time.time() - item_start_times[item])
+                elapsed_s = time.time() - item_start_times[item]
+                elapsed = _format_elapsed(elapsed_s)
                 try:
                     fut.result()
                     completed_count += 1
+                    tile_results[item] = {"status": "DONE", "elapsed_s": elapsed_s, "error": None}
                     main_logger.info(f"[{idx}/{total}] {item} - DONE ({elapsed}) [{completed_count} ok / {failed_count} failed]")
                 except Exception as e:
                     failed_count += 1
+                    tile_results[item] = {"status": "FAILED", "elapsed_s": elapsed_s, "error": str(e)}
                     main_logger.info(f"[{idx}/{total}] {item} - FAILED ({elapsed}): {e} [{completed_count} ok / {failed_count} failed]")
 
         # Stop dashboard and print one final snapshot
@@ -718,14 +724,52 @@ if pre_start_flag == 1:
             try:
                 process_tile(current_item)
                 completed_count += 1
-                elapsed = _format_elapsed(time.time() - item_start_times[current_item])
-                main_logger.info(f"[{idx}/{total}] {current_item} - DONE ({elapsed})")
+                elapsed_s = time.time() - item_start_times[current_item]
+                tile_results[current_item] = {"status": "DONE", "elapsed_s": elapsed_s, "error": None}
+                main_logger.info(f"[{idx}/{total}] {current_item} - DONE ({_format_elapsed(elapsed_s)})")
             except Exception as e:
                 failed_count += 1
-                elapsed = _format_elapsed(time.time() - item_start_times[current_item])
-                main_logger.info(f"[{idx}/{total}] {current_item} - FAILED ({elapsed}): {e}")
+                elapsed_s = time.time() - item_start_times[current_item]
+                tile_results[current_item] = {"status": "FAILED", "elapsed_s": elapsed_s, "error": str(e)}
+                main_logger.info(f"[{idx}/{total}] {current_item} - FAILED ({_format_elapsed(elapsed_s)}): {e}")
 
-    main_logger.info(f"Summary: {completed_count} completed, {failed_count} failed out of {total}")
+    # Final summary written to 4_logfile.log
+    main_logger.info("")
+    main_logger.info("=" * 70)
+    main_logger.info("FINAL SUMMARY")
+    main_logger.info("=" * 70)
+    main_logger.info(f"Total time: {_format_elapsed(time.time() - POS2IDON_time0)}")
+    main_logger.info(f"Tiles completed: {completed_count}/{total}")
+    main_logger.info(f"Tiles failed:    {failed_count}/{total}")
+    main_logger.info("")
+    main_logger.info(f"  {'#':>3}  {'Tile':6s}  {'Status':6s}  {'Elapsed':10s}  Error")
+    main_logger.info(f"  {'-'*3}  {'-'*6}  {'-'*6}  {'-'*10}  {'-'*30}")
+    for idx, item in enumerate(processing_items, 1):
+        r = tile_results.get(item, {"status": "?", "elapsed_s": 0, "error": None})
+        err = r["error"] or ""
+        main_logger.info(f"  {idx:>3}  {item:6s}  {r['status']:6s}  {_format_elapsed(r['elapsed_s']):10s}  {err}")
+    main_logger.info("=" * 70)
+
+    # Delete per-tile log files now that the summary has been recorded.
+    # On failure, append the tail of the per-tile log to the main log first.
+    for item in processing_items:
+        per_tile_log = f"4_logfile_{item}.log"
+        if not os.path.exists(per_tile_log):
+            continue
+        if tile_results.get(item, {}).get("status") == "FAILED":
+            try:
+                with open(per_tile_log) as f:
+                    tail = f.readlines()[-30:]
+                main_logger.info(f"--- Last 30 lines of {item} log (FAILED) ---")
+                for line in tail:
+                    main_logger.info(line.rstrip())
+                main_logger.info("--- end ---")
+            except Exception:
+                pass
+        try:
+            os.remove(per_tile_log)
+        except Exception:
+            pass
 
 else:
     print("Failed to pré-start script")
