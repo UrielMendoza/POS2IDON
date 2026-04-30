@@ -224,6 +224,13 @@ delete = {"original_products": False, # True
           "all_intermediate": False
           }
 
+# After the entire pipeline finishes, keep ONLY the classification results
+# (3_Classification_Results_*). Deletes 0_S2L1C_Products_*, 1_Atmospheric_Corrected_Products_*,
+# 2_Masked_Products_* and 2-1_ESA_Worldcover folders inside base_output_dir.
+# Useful when disk space is limited and only the final maps matter.
+# Other inputs besides bool will stop the pré-start.
+keep_only_classification = True
+
 
 # FOLDERS NAMES ############################################################################
 

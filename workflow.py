@@ -779,6 +779,41 @@ if pre_start_flag == 1:
         except Exception:
             pass
 
+    # Final cleanup: keep only classification results, delete everything else.
+    _keep_only_classification = keep_only_classification if 'keep_only_classification' in vars() else False
+    if _keep_only_classification:
+        main_logger.info("")
+        main_logger.info("=" * 70)
+        main_logger.info("FINAL CLEANUP: keeping only classification results")
+        main_logger.info("=" * 70)
+        try:
+            entries = sorted(os.listdir(base_output_dir))
+        except Exception as e:
+            entries = []
+            main_logger.info(f"Could not list {base_output_dir}: {e}")
+        for entry in entries:
+            full = os.path.join(base_output_dir, entry)
+            # Keep classification results and the orchestrator log
+            if entry.startswith("3_Classification_Results"):
+                main_logger.info(f"  KEEP   {entry}")
+                continue
+            # Delete S2L1C downloads, AC products, masked products, ESA worldcover
+            if (entry.startswith("0_S2L1C_Products")
+                or entry.startswith("1_Atmospheric_Corrected_Products")
+                or entry.startswith("2_Masked_Products")
+                or entry.startswith("2-1_ESA_Worldcover")):
+                try:
+                    if os.path.isdir(full):
+                        shutil.rmtree(full)
+                    else:
+                        os.remove(full)
+                    main_logger.info(f"  DELETE {entry}")
+                except Exception as e:
+                    main_logger.info(f"  FAILED to delete {entry}: {e}")
+            else:
+                main_logger.info(f"  SKIP   {entry}  (not recognized, leaving as-is)")
+        main_logger.info("=" * 70)
+
 else:
     print("Failed to pré-start script")
 

@@ -240,6 +240,17 @@ def input_checker():
         inputs_flag = inputs_flag*0
         log_list.append("'parallel_max_workers' must be None or positive int.")
 
+    try:
+        from configs.User_Inputs import keep_only_classification
+    except ImportError:
+        keep_only_classification = False
+
+    if isinstance(keep_only_classification, bool):
+        inputs_flag = inputs_flag*1
+    else:
+        inputs_flag = inputs_flag*0
+        log_list.append("'keep_only_classification' is not boolean.")
+
     return inputs_flag, log_list
 
 ############################################################################################
