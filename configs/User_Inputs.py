@@ -203,7 +203,7 @@ parallel_processing = True
 # None - Use os.cpu_count().
 # Integer - Use exactly that many workers.
 # Other inputs besides None or positive int will stop the pré-start.
-parallel_max_workers = 18
+parallel_max_workers = 9
 
 
 # Delete processed folders and files:

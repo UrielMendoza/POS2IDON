@@ -700,10 +700,12 @@ if pre_start_flag == 1:
                     fut.result()
                     completed_count += 1
                     tile_results[item] = {"status": "DONE", "elapsed_s": elapsed_s, "error": None}
+                    finished_tiles[item] = "DONE"
                     main_logger.info(f"[{idx}/{total}] {item} - DONE ({elapsed}) [{completed_count} ok / {failed_count} failed]")
                 except Exception as e:
                     failed_count += 1
                     tile_results[item] = {"status": "FAILED", "elapsed_s": elapsed_s, "error": str(e)}
+                    finished_tiles[item] = "FAILED"
                     main_logger.info(f"[{idx}/{total}] {item} - FAILED ({elapsed}): {e} [{completed_count} ok / {failed_count} failed]")
 
         # Stop dashboard and print one final snapshot
