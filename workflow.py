@@ -626,6 +626,7 @@ if pre_start_flag == 1:
     import threading
     _dashboard_stop = threading.Event()
     _dashboard_refresh = 30  # seconds between dashboard prints
+    finished_tiles = {}  # item -> "DONE" | "FAILED"  (set by parent when subprocess returns)
 
     def _read_stage(item):
         """Read the current stage of a tile from its status file."""
@@ -649,11 +650,16 @@ if pre_start_flag == 1:
         lines.append("")
         lines.append(f"=== STATUS @ {time.strftime('%H:%M:%S')}  total {total_elapsed}  ({completed_count} done / {failed_count} failed of {total}) ===")
         for idx, item in enumerate(processing_items, 1):
-            stage, stage_ts = _read_stage(item)
-            if stage_ts is not None:
-                stage_elapsed = _format_elapsed(now - stage_ts)
-            else:
+            # If parent already knows the final outcome, show that instead of the stale stage file
+            if item in finished_tiles:
+                stage = finished_tiles[item]
                 stage_elapsed = "-"
+            else:
+                stage, stage_ts = _read_stage(item)
+                if stage_ts is not None:
+                    stage_elapsed = _format_elapsed(now - stage_ts)
+                else:
+                    stage_elapsed = "-"
             lines.append(f"  [{idx:>2}/{total}] {item:6s}  {stage:18s}  {stage_elapsed}")
         lines.append("")
         sys.stdout.write("\n".join(lines) + "\n")
