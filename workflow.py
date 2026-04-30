@@ -604,6 +604,8 @@ if pre_start_flag == 1:
 
     def _run_tile_subprocess(item):
         """Launch a fully isolated Python subprocess to process one tile."""
+        started_tiles.add(item)
+        item_start_times[item] = time.time()
         proc = subprocess.run(
             [sys.executable, sys.argv[0], "--tile", item],
             capture_output=True,
@@ -627,6 +629,18 @@ if pre_start_flag == 1:
     _dashboard_stop = threading.Event()
     _dashboard_refresh = 30  # seconds between dashboard prints
     finished_tiles = {}  # item -> "DONE" | "FAILED"  (set by parent when subprocess returns)
+    started_tiles = set()  # items whose subprocess has actually been launched
+
+    # Clean up stale status files left over from a previous run that died abruptly.
+    # Without this the dashboard would show old "ACOLITE 4h..." entries for tiles
+    # that haven't even started yet in the current run.
+    for item in processing_items:
+        try:
+            os.remove(f"4_status_{item}.txt")
+        except FileNotFoundError:
+            pass
+        except Exception:
+            pass
 
     def _read_stage(item):
         """Read the current stage of a tile from its status file."""
@@ -650,9 +664,13 @@ if pre_start_flag == 1:
         lines.append("")
         lines.append(f"=== STATUS @ {time.strftime('%H:%M:%S')}  total {total_elapsed}  ({completed_count} done / {failed_count} failed of {total}) ===")
         for idx, item in enumerate(processing_items, 1):
-            # If parent already knows the final outcome, show that instead of the stale stage file
+            # If parent already knows the final outcome, show that
             if item in finished_tiles:
                 stage = finished_tiles[item]
+                stage_elapsed = "-"
+            # Tile waiting in the worker queue (not yet launched)
+            elif item not in started_tiles:
+                stage = "QUEUED"
                 stage_elapsed = "-"
             else:
                 stage, stage_ts = _read_stage(item)
