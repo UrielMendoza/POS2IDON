@@ -11,10 +11,23 @@ Atlantic International Research Centre (AIR Centre - EO LAB), Terceira, Azores, 
 
 ### Pré Start
 
-# Start logging
+# Detect single-tile worker mode early. When invoked with `--tile <ID>`, this script
+# acts as an isolated worker that processes only that tile. The orchestrator (no flag)
+# launches one such subprocess per tile so a crash in one tile cannot break the others.
+import sys
+_single_tile_mode = None
+if "--tile" in sys.argv:
+    _idx = sys.argv.index("--tile")
+    if _idx + 1 < len(sys.argv):
+        _single_tile_mode = sys.argv[_idx + 1]
+
+# Start logging. The orchestrator writes to 4_logfile.log (overwrite); each subprocess
+# worker appends to 4_logfile_<tile>.log via its own per-tile logger.
 try:
     import logging
-    logging.basicConfig(filename="4_logfile.log", format="%(asctime)s - %(name)s - %(message)s", filemode='w')
+    _orchestrator_logfile = "4_logfile.log"
+    _orchestrator_filemode = 'a' if _single_tile_mode else 'w'
+    logging.basicConfig(filename=_orchestrator_logfile, format="%(asctime)s - %(name)s - %(message)s", filemode=_orchestrator_filemode)
     main_logger = logging.getLogger("main")
     main_logger.setLevel(logging.INFO)
     handler = logging.StreamHandler()
@@ -70,7 +83,8 @@ try:
     from dotenv import load_dotenv
     import glob
     import time
-    from concurrent.futures import ProcessPoolExecutor, as_completed
+    import subprocess
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     libraries_flag = 1
 except Exception as e:
@@ -105,8 +119,9 @@ def process_tile(current_item):
     masking and classification. Each call uses its own logger writing to a per-tile
     log file so tiles can run in parallel without interleaving output.
     """
-    # Per-tile logger (separate file + console). Avoid duplicate handlers if the
-    # same logger object is reused across calls.
+    # Per-tile logger that writes ONLY to its own file. No StreamHandler so the parent's
+    # terminal output stays clean when many tiles run in parallel. Watch progress with:
+    #   tail -f 4_logfile_<tile>.log
     tile_logger = logging.getLogger(f"main_{current_item}")
     tile_logger.setLevel(logging.INFO)
     tile_logger.propagate = False
@@ -114,9 +129,6 @@ def process_tile(current_item):
         fh = logging.FileHandler(f"4_logfile_{current_item}.log", mode='w')
         fh.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(message)s"))
         tile_logger.addHandler(fh)
-        sh = logging.StreamHandler()
-        sh.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(message)s"))
-        tile_logger.addHandler(sh)
     # Use 'main_logger' as the local name so the existing body keeps working
     main_logger = tile_logger
 
@@ -527,6 +539,22 @@ def process_tile(current_item):
 ############################################################################################
 # Start POS2IDON main processing time
 POS2IDON_time0 = time.time()
+
+# Single-tile worker mode: process exactly one tile and exit. Used by the orchestrator
+# below to launch each tile as an isolated subprocess.
+if _single_tile_mode is not None:
+    if pre_start_flag == 1:
+        try:
+            process_tile(_single_tile_mode)
+            sys.exit(0)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
+    else:
+        print("Failed to pré-start script")
+        sys.exit(2)
+
 if pre_start_flag == 1:
 
     # Determine search mode and build the list of items to iterate over
@@ -545,27 +573,77 @@ if pre_start_flag == 1:
         _max_workers = os.cpu_count() or 1
     _max_workers = min(_max_workers, len(processing_items)) if processing_items else 1
 
-    if _parallel and len(processing_items) > 1:
-        main_logger.info(f"Running {len(processing_items)} items in parallel with {_max_workers} workers")
-        with ProcessPoolExecutor(max_workers=_max_workers) as ex:
-            futures = {ex.submit(process_tile, item): item for item in processing_items}
+    total = len(processing_items)
+    completed_count = 0
+    failed_count = 0
+    item_start_times = {}
+
+    def _format_elapsed(seconds):
+        m, s = divmod(int(seconds), 60)
+        h, m = divmod(m, 60)
+        return f"{h:d}h{m:02d}m{s:02d}s" if h else f"{m:d}m{s:02d}s"
+
+    def _run_tile_subprocess(item):
+        """Launch a fully isolated Python subprocess to process one tile."""
+        proc = subprocess.run(
+            [sys.executable, sys.argv[0], "--tile", item],
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            # Append captured stderr to the tile's log file for post-mortem debugging
+            try:
+                with open(f"4_logfile_{item}.log", "a") as f:
+                    f.write(f"\n=== SUBPROCESS FAILED (exit {proc.returncode}) ===\n")
+                    if proc.stderr:
+                        f.write(proc.stderr)
+                    if proc.stdout:
+                        f.write("\n--- stdout ---\n" + proc.stdout)
+            except Exception:
+                pass
+            raise RuntimeError(f"exit code {proc.returncode}")
+        return item
+
+    if _parallel and total > 1:
+        main_logger.info(f"Running {total} items in parallel with {_max_workers} workers (isolated subprocesses)")
+        main_logger.info(f"Per-tile logs: 4_logfile_<tile>.log  (tail -f to follow)")
+        with ThreadPoolExecutor(max_workers=_max_workers) as ex:
+            futures = {}
+            for idx, item in enumerate(processing_items, 1):
+                fut = ex.submit(_run_tile_subprocess, item)
+                futures[fut] = (idx, item)
+                item_start_times[item] = time.time()
+                main_logger.info(f"[{idx}/{total}] {item} - submitted")
+
             for fut in as_completed(futures):
-                item = futures[fut]
+                idx, item = futures[fut]
+                elapsed = _format_elapsed(time.time() - item_start_times[item])
                 try:
                     fut.result()
-                    main_logger.info(f"Item {item} completed")
+                    completed_count += 1
+                    main_logger.info(f"[{idx}/{total}] {item} - DONE ({elapsed}) [{completed_count} ok / {failed_count} failed]")
                 except Exception as e:
-                    main_logger.info(f"Item {item} failed: {e}")
+                    failed_count += 1
+                    main_logger.info(f"[{idx}/{total}] {item} - FAILED ({elapsed}): {e} [{completed_count} ok / {failed_count} failed]")
     else:
-        if _parallel and len(processing_items) <= 1:
+        if _parallel and total <= 1:
             main_logger.info("Only one item to process, running sequentially")
         else:
-            main_logger.info(f"Running {len(processing_items)} items sequentially")
-        for current_item in processing_items:
+            main_logger.info(f"Running {total} items sequentially")
+        for idx, current_item in enumerate(processing_items, 1):
+            item_start_times[current_item] = time.time()
+            main_logger.info(f"[{idx}/{total}] {current_item} - started")
             try:
                 process_tile(current_item)
+                completed_count += 1
+                elapsed = _format_elapsed(time.time() - item_start_times[current_item])
+                main_logger.info(f"[{idx}/{total}] {current_item} - DONE ({elapsed})")
             except Exception as e:
-                main_logger.info(f"Item {current_item} failed: {e}")
+                failed_count += 1
+                elapsed = _format_elapsed(time.time() - item_start_times[current_item])
+                main_logger.info(f"[{idx}/{total}] {current_item} - FAILED ({elapsed}): {e}")
+
+    main_logger.info(f"Summary: {completed_count} completed, {failed_count} failed out of {total}")
 
 else:
     print("Failed to pré-start script")

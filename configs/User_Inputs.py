@@ -196,10 +196,14 @@ classification_options = {"split_and_mosaic": False,
 parallel_processing = True
 
 # Maximum number of worker processes when parallel_processing = True.
-# None - Use all available CPU cores (os.cpu_count()).
+# Each tile runs as an isolated Python subprocess, so a crash in one tile
+# does not affect the others.
+# Use `free -h` to check available RAM and pick a value: ACOLITE may use 3-6 GB
+# per worker, so a rough rule is workers ~= total_RAM_GB / 8.
+# None - Use os.cpu_count().
 # Integer - Use exactly that many workers.
 # Other inputs besides None or positive int will stop the pré-start.
-parallel_max_workers = None
+parallel_max_workers = 8
 
 
 # Delete processed folders and files:
