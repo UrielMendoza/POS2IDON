@@ -552,6 +552,18 @@ def process_tile(current_item):
     else:
         main_logger.info("Processing ignored")
 
+    # Verify expected output produced. If classification was supposed to run but no
+    # *-scmap.tif was generated, treat the whole tile as FAILED instead of silently
+    # reporting DONE. This catches cases where errors were caught and logged but no
+    # actual result was produced (e.g. masked stack missing, empty input, etc.).
+    if processing == True and classification == True:
+        produced_tifs = glob.glob(os.path.join(classification_products_folder, "*", "sc_maps", "*-scmap.tif"))
+        if not produced_tifs:
+            main_logger.info(f"No classification output produced in {classification_products_folder}")
+            raise RuntimeError(f"no classification TIF produced for {current_item}")
+        else:
+            main_logger.info(f"Verified {len(produced_tifs)} classification TIF(s) in {classification_products_folder}")
+
     _set_stage("DONE")
 
 
@@ -776,8 +788,10 @@ if pre_start_flag == 1:
         main_logger.info(f"  {idx:>3}  {item:6s}  {r['status']:6s}  {_format_elapsed(r['elapsed_s']):10s}  {err}")
     main_logger.info("=" * 70)
 
-    # Delete per-tile log files now that the summary has been recorded.
-    # On failure, append the tail of the per-tile log to the main log first.
+    # Per-tile log handling. We always copy the tail of FAILED tile logs into the
+    # main log so the summary is self-contained. Whether to delete the per-tile
+    # files afterwards depends on keep_only_classification.
+    _keep_only_classification = keep_only_classification if 'keep_only_classification' in vars() else False
     for item in processing_items:
         per_tile_log = f"4_logfile_{item}.log"
         if not os.path.exists(per_tile_log):
@@ -785,20 +799,20 @@ if pre_start_flag == 1:
         if tile_results.get(item, {}).get("status") == "FAILED":
             try:
                 with open(per_tile_log) as f:
-                    tail = f.readlines()[-30:]
-                main_logger.info(f"--- Last 30 lines of {item} log (FAILED) ---")
+                    tail = f.readlines()[-100:]
+                main_logger.info(f"--- Last {len(tail)} lines of {item} log (FAILED) ---")
                 for line in tail:
                     main_logger.info(line.rstrip())
                 main_logger.info("--- end ---")
             except Exception:
                 pass
-        try:
-            os.remove(per_tile_log)
-        except Exception:
-            pass
+        if _keep_only_classification:
+            try:
+                os.remove(per_tile_log)
+            except Exception:
+                pass
 
     # Final cleanup: keep only classification results, delete everything else.
-    _keep_only_classification = keep_only_classification if 'keep_only_classification' in vars() else False
     if _keep_only_classification:
         main_logger.info("")
         main_logger.info("=" * 70)
