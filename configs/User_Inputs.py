@@ -31,7 +31,10 @@ search_by = "tile"
 # List of Sentinel-2 tile IDs to process (used when search_by = "tile").
 # Each tile generates its own set of output folders and is processed independently.
 # Other inputs besides non-empty list of strings will stop the pré-start.
-tiles = ["16QEJ"]
+# Ordered fastest→slowest (from previous run) so workers free up sooner.
+tiles = ["16QDG","16PEC","16QDE","16QED","16PCC","16PDC","16QCE","16QEE",
+         "16QDD","16QEF","16QEH","16QCF","16QDJ","16QDF","16QCD",
+         "16QDH","16QEG","16QEJ"]
 
 # SEARCH ###################################################################################
 
