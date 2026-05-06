@@ -215,7 +215,7 @@ parallel_max_workers = 9
 # Rule of thumb: total_RAM_GB * 0.8 / parallel_max_workers
 # (e.g. 251 GB server, 9 workers → ~22 GB limit)
 # Other inputs besides None or positive number will stop the pré-start.
-memory_limit_per_worker_gb = 22
+memory_limit_per_worker_gb = 30
 
 
 # Delete processed folders and files:
