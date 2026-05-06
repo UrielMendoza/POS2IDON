@@ -603,6 +603,7 @@ if pre_start_flag == 1:
     if _max_workers is None:
         _max_workers = os.cpu_count() or 1
     _max_workers = min(_max_workers, len(processing_items)) if processing_items else 1
+    _memory_limit_gb = memory_limit_per_worker_gb if 'memory_limit_per_worker_gb' in vars() else None
 
     total = len(processing_items)
     completed_count = 0
@@ -618,23 +619,60 @@ if pre_start_flag == 1:
         """Launch a fully isolated Python subprocess to process one tile."""
         started_tiles.add(item)
         item_start_times[item] = time.time()
-        proc = subprocess.run(
+
+        proc = subprocess.Popen(
             [sys.executable, sys.argv[0], "--tile", item],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
         )
-        if proc.returncode != 0:
-            # Append captured stderr to the tile's log file for post-mortem debugging
+
+        _kill_event = threading.Event()
+        _kill_reason = [None]
+
+        def _mem_watchdog():
+            if _memory_limit_gb is None:
+                return
+            try:
+                import psutil
+                ps = psutil.Process(proc.pid)
+            except Exception:
+                return
+            while not _kill_event.wait(15):
+                if proc.poll() is not None:
+                    break
+                try:
+                    children = ps.children(recursive=True)
+                    mem_gb = sum(p.memory_info().rss for p in [ps] + children) / (1024 ** 3)
+                    if mem_gb > _memory_limit_gb:
+                        _kill_reason[0] = f"memory limit {_memory_limit_gb:.0f} GB exceeded ({mem_gb:.1f} GB used)"
+                        proc.kill()
+                        break
+                except Exception:
+                    break
+
+        watchdog = threading.Thread(target=_mem_watchdog, daemon=True)
+        watchdog.start()
+
+        stdout_str, stderr_str = proc.communicate()
+
+        _kill_event.set()
+        watchdog.join(timeout=2)
+
+        if _kill_reason[0] or proc.returncode != 0:
             try:
                 with open(f"4_logfile_{item}.log", "a") as f:
-                    f.write(f"\n=== SUBPROCESS FAILED (exit {proc.returncode}) ===\n")
-                    if proc.stderr:
-                        f.write(proc.stderr)
-                    if proc.stdout:
-                        f.write("\n--- stdout ---\n" + proc.stdout)
+                    if _kill_reason[0]:
+                        f.write(f"\n=== SUBPROCESS KILLED: {_kill_reason[0]} ===\n")
+                    else:
+                        f.write(f"\n=== SUBPROCESS FAILED (exit {proc.returncode}) ===\n")
+                    if stderr_str:
+                        f.write(stderr_str)
+                    if stdout_str:
+                        f.write("\n--- stdout ---\n" + stdout_str)
             except Exception:
                 pass
-            raise RuntimeError(f"exit code {proc.returncode}")
+            raise RuntimeError(_kill_reason[0] or f"exit code {proc.returncode}")
         return item
 
     import threading

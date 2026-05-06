@@ -251,6 +251,17 @@ def input_checker():
         inputs_flag = inputs_flag*0
         log_list.append("'keep_only_classification' is not boolean.")
 
+    try:
+        from configs.User_Inputs import memory_limit_per_worker_gb
+    except ImportError:
+        memory_limit_per_worker_gb = None
+
+    if (memory_limit_per_worker_gb is None) or (isinstance(memory_limit_per_worker_gb, (int, float)) and memory_limit_per_worker_gb > 0):
+        inputs_flag = inputs_flag*1
+    else:
+        inputs_flag = inputs_flag*0
+        log_list.append("'memory_limit_per_worker_gb' must be None or a positive number.")
+
     return inputs_flag, log_list
 
 ############################################################################################

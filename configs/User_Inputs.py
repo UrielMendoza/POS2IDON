@@ -31,9 +31,7 @@ search_by = "tile"
 # List of Sentinel-2 tile IDs to process (used when search_by = "tile").
 # Each tile generates its own set of output folders and is processed independently.
 # Other inputs besides non-empty list of strings will stop the pré-start.
-tiles = ["16QDJ","16QEJ","16QDH","16QEH","16QDG","16QEG","16QDF","16QEF",
-         "16QCF","16QCE","16QDE","16QEE","16QCD","16QDD","16QED",
-         "16PCC","16PDC","16PEC"]
+tiles = ["16QEJ"]
 
 # SEARCH ###################################################################################
 
@@ -203,7 +201,18 @@ parallel_processing = True
 # None - Use os.cpu_count().
 # Integer - Use exactly that many workers.
 # Other inputs besides None or positive int will stop the pré-start.
-parallel_max_workers = 6
+parallel_max_workers = 3
+
+# Memory limit per worker process in GB.
+# If a tile subprocess (and all its children) exceeds this RSS threshold,
+# it is killed immediately and marked FAILED — freeing the worker slot
+# instead of waiting for the kernel OOM killer hours later.
+# None - no limit.
+# Float/int - kill if total RSS exceeds this value in GB.
+# Rule of thumb: total_RAM_GB * 0.8 / parallel_max_workers
+# (e.g. 251 GB server, 3 workers → ~67 GB limit)
+# Other inputs besides None or positive number will stop the pré-start.
+memory_limit_per_worker_gb = 60
 
 
 # Delete processed folders and files:
