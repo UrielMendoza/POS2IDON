@@ -204,7 +204,7 @@ parallel_processing = True
 # None - Use os.cpu_count().
 # Integer - Use exactly that many workers.
 # Other inputs besides None or positive int will stop the pré-start.
-parallel_max_workers = 9
+parallel_max_workers = 6
 
 # Memory limit per worker process in GB.
 # If a tile subprocess (and all its children) exceeds this RSS threshold,
