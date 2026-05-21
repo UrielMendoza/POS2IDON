@@ -31,10 +31,11 @@ search_by = "tile"
 # List of Sentinel-2 tile IDs to process (used when search_by = "tile").
 # Each tile generates its own set of output folders and is processed independently.
 # Other inputs besides non-empty list of strings will stop the pré-start.
-# Ordered fastest→slowest (from previous run) so workers free up sooner.
-tiles = ["16QDG","16PEC","16QDE","16QED","16PCC","16PDC","16QCE","16QEE",
-         "16QDD","16QEF","16QEH","16QCF","16QDJ","16QDF","16QCD",
-         "16QDH","16QEG","16QEJ"]
+# Light tiles first so workers free up sooner; heavy tiles (>80 GB) go last
+# because the pipeline auto-retries them solo if they fail due to memory.
+tiles = ["16QDG","16PEC","16QED","16PCC","16PDC","16QEE","16QDD","16QEF",
+         "16QEH","16QCF","16QDJ","16QDF","16QCD","16QEG",
+         "16QDE","16QCE","16QDH","16QEJ"]
 
 # SEARCH ###################################################################################
 
@@ -207,13 +208,12 @@ parallel_processing = True
 parallel_max_workers = 3
 
 # Memory limit per worker process in GB.
-# If a tile subprocess (and all its children) exceeds this RSS threshold,
-# it is killed immediately and marked FAILED — freeing the worker slot
-# instead of waiting for the kernel OOM killer hours later.
-# None - no limit.
-# Float/int - kill if total RSS exceeds this value in GB.
-# With 251 GB RAM and tiles peaking at 30-80 GB, max safe workers = 3.
-# Set limit to 80 GB (observed max) as an emergency guard only.
+# Tiles that exceed this threshold are killed early (freeing the worker slot)
+# and then automatically retried one at a time without a memory limit, so
+# heavy tiles always complete without manual intervention.
+# Rule: (total_RAM_GB * 0.8) / parallel_max_workers  →  251*0.8/3 ≈ 67 GB.
+# Use 80 to give headroom; tiles >80 GB get auto-retried solo.
+# None - disables the watchdog entirely (not recommended for parallel runs).
 # Other inputs besides None or positive number will stop the pré-start.
 memory_limit_per_worker_gb = 80
 

@@ -809,6 +809,44 @@ if pre_start_flag == 1:
                 tile_results[current_item] = {"status": "FAILED", "elapsed_s": elapsed_s, "error": str(e)}
                 main_logger.info(f"[{idx}/{total}] {current_item} - FAILED ({_format_elapsed(elapsed_s)}): {e}")
 
+    # ── Auto-retry tiles that failed due to memory pressure ──────────────────
+    # Heavy tiles (>80 GB RSS) can exceed memory_limit_per_worker_gb when
+    # running concurrently. Re-run them one at a time with no limit so they
+    # always complete without manual intervention (needed for 60-date runs).
+    _memory_retry_items = [
+        item for item in processing_items
+        if tile_results.get(item, {}).get("status") == "FAILED"
+        and "memory" in (tile_results.get(item, {}).get("error") or "").lower()
+    ]
+    if _memory_retry_items:
+        main_logger.info("")
+        main_logger.info("=" * 70)
+        main_logger.info(f"AUTO-RETRY: {len(_memory_retry_items)} tile(s) killed by memory limit — retrying one at a time")
+        main_logger.info("=" * 70)
+        _memory_limit_gb = None  # closure picks up new value; no limit when running alone
+        for _ri, item in enumerate(_memory_retry_items, 1):
+            # Delete partial ACOLITE / masking output so the retry starts clean.
+            for _pfx in ("1_Atmospheric_Corrected_Products", "2_Masked_Products"):
+                _partial = os.path.join(base_output_dir, f"{_pfx}_{item}_{sensing_period[0]}")
+                if os.path.exists(_partial):
+                    import shutil as _shutil
+                    _shutil.rmtree(_partial, ignore_errors=True)
+                    main_logger.info(f"  [{_ri}/{len(_memory_retry_items)}] Removed partial {_pfx} for {item}")
+            main_logger.info(f"  [{_ri}/{len(_memory_retry_items)}] Retrying {item} (sequential, no memory limit)...")
+            _retry_t0 = time.time()
+            try:
+                _run_tile_subprocess(item)
+                _retry_elapsed_s = time.time() - _retry_t0
+                completed_count += 1
+                failed_count -= 1
+                tile_results[item] = {"status": "DONE", "elapsed_s": _retry_elapsed_s, "error": "(retried)"}
+                finished_tiles[item] = "DONE"
+                main_logger.info(f"  [{_ri}/{len(_memory_retry_items)}] {item} retry DONE ({_format_elapsed(_retry_elapsed_s)})")
+            except Exception as _re:
+                _retry_elapsed_s = time.time() - _retry_t0
+                tile_results[item]["error"] = f"retry failed: {_re}"
+                main_logger.info(f"  [{_ri}/{len(_memory_retry_items)}] {item} retry FAILED ({_format_elapsed(_retry_elapsed_s)}): {_re}")
+
     # Final summary written to 4_logfile.log
     main_logger.info("")
     main_logger.info("=" * 70)
