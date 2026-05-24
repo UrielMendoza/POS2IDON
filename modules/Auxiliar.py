@@ -262,6 +262,28 @@ def input_checker():
         inputs_flag = inputs_flag*0
         log_list.append("'memory_limit_per_worker_gb' must be None or a positive number.")
 
+    try:
+        from configs.User_Inputs import memory_retry_workers
+    except ImportError:
+        memory_retry_workers = 2
+
+    if isinstance(memory_retry_workers, int) and memory_retry_workers > 0:
+        inputs_flag = inputs_flag*1
+    else:
+        inputs_flag = inputs_flag*0
+        log_list.append("'memory_retry_workers' must be a positive int.")
+
+    try:
+        from configs.User_Inputs import low_memory_tiles
+    except ImportError:
+        low_memory_tiles = []
+
+    if isinstance(low_memory_tiles, list) and all(isinstance(t, str) for t in low_memory_tiles):
+        inputs_flag = inputs_flag*1
+    else:
+        inputs_flag = inputs_flag*0
+        log_list.append("'low_memory_tiles' must be a list of tile ID strings.")
+
     return inputs_flag, log_list
 
 ############################################################################################

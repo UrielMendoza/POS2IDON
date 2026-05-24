@@ -143,6 +143,13 @@ def process_tile(current_item):
 
     _set_stage("STARTING")
 
+    # Tiles that use low-memory ACOLITE settings (dsf_aot_estimate='fixed')
+    try:
+        from configs.User_Inputs import low_memory_tiles as _low_memory_tiles
+    except ImportError:
+        _low_memory_tiles = []
+    _use_low_memory_acolite = current_item in _low_memory_tiles
+
     # Determine search mode and resolve folder paths (locals to avoid UnboundLocalError)
     _search_by = search_by if 'search_by' in globals() else "roi"
     if _search_by == "tile":
@@ -298,7 +305,7 @@ def process_tile(current_item):
                             main_logger.info("Performing atmospheric correction with ACOLITE")
                             # Apply ACOLITE algorithm
                             try:
-                                ACacolite(product_in_urls_list[0], ac_products_folder, os.getenv(evariables[4]), os.getenv(evariables[5]), current_roi)
+                                ACacolite(product_in_urls_list[0], ac_products_folder, os.getenv(evariables[4]), os.getenv(evariables[5]), current_roi, low_memory=_use_low_memory_acolite)
                                 corrupted_flag = 0
                             except Exception as e:
                                 corrupted_flag = 1
@@ -604,6 +611,7 @@ if pre_start_flag == 1:
         _max_workers = os.cpu_count() or 1
     _max_workers = min(_max_workers, len(processing_items)) if processing_items else 1
     _memory_limit_gb = memory_limit_per_worker_gb if 'memory_limit_per_worker_gb' in vars() else None
+    _retry_max_workers = memory_retry_workers if 'memory_retry_workers' in vars() else 2
 
     total = len(processing_items)
     completed_count = 0
@@ -821,31 +829,43 @@ if pre_start_flag == 1:
     if _memory_retry_items:
         main_logger.info("")
         main_logger.info("=" * 70)
-        main_logger.info(f"AUTO-RETRY: {len(_memory_retry_items)} tile(s) killed by memory limit — retrying one at a time")
+        _rw = min(_retry_max_workers, len(_memory_retry_items))
+        main_logger.info(f"AUTO-RETRY: {len(_memory_retry_items)} tile(s) killed by memory limit — retrying with {_rw} worker(s), no memory limit")
         main_logger.info("=" * 70)
-        _memory_limit_gb = None  # closure picks up new value; no limit when running alone
-        for _ri, item in enumerate(_memory_retry_items, 1):
-            # Delete partial ACOLITE / masking output so the retry starts clean.
+        _memory_limit_gb = None  # closure picks up new value; no limit for retry
+
+        # Clean up partial ACOLITE/masking output before submitting retries.
+        import shutil as _shutil
+        _retry_start_times = {}
+        for item in _memory_retry_items:
             for _pfx in ("1_Atmospheric_Corrected_Products", "2_Masked_Products"):
                 _partial = os.path.join(base_output_dir, f"{_pfx}_{item}_{sensing_period[0]}")
                 if os.path.exists(_partial):
-                    import shutil as _shutil
                     _shutil.rmtree(_partial, ignore_errors=True)
-                    main_logger.info(f"  [{_ri}/{len(_memory_retry_items)}] Removed partial {_pfx} for {item}")
-            main_logger.info(f"  [{_ri}/{len(_memory_retry_items)}] Retrying {item} (sequential, no memory limit)...")
-            _retry_t0 = time.time()
-            try:
-                _run_tile_subprocess(item)
-                _retry_elapsed_s = time.time() - _retry_t0
-                completed_count += 1
-                failed_count -= 1
-                tile_results[item] = {"status": "DONE", "elapsed_s": _retry_elapsed_s, "error": "(retried)"}
-                finished_tiles[item] = "DONE"
-                main_logger.info(f"  [{_ri}/{len(_memory_retry_items)}] {item} retry DONE ({_format_elapsed(_retry_elapsed_s)})")
-            except Exception as _re:
-                _retry_elapsed_s = time.time() - _retry_t0
-                tile_results[item]["error"] = f"retry failed: {_re}"
-                main_logger.info(f"  [{_ri}/{len(_memory_retry_items)}] {item} retry FAILED ({_format_elapsed(_retry_elapsed_s)}): {_re}")
+                    main_logger.info(f"  Removed partial {_pfx} for {item}")
+
+        with ThreadPoolExecutor(max_workers=_rw) as _retry_ex:
+            _retry_futures = {}
+            for _ri, item in enumerate(_memory_retry_items, 1):
+                _retry_start_times[item] = time.time()
+                _fut = _retry_ex.submit(_run_tile_subprocess, item)
+                _retry_futures[_fut] = (_ri, item)
+                main_logger.info(f"  [{_ri}/{len(_memory_retry_items)}] {item} retry submitted")
+
+            for _fut in as_completed(_retry_futures):
+                _ri, item = _retry_futures[_fut]
+                _retry_elapsed_s = time.time() - _retry_start_times[item]
+                try:
+                    _fut.result()
+                    completed_count += 1
+                    failed_count -= 1
+                    tile_results[item] = {"status": "DONE", "elapsed_s": _retry_elapsed_s, "error": "(retried)"}
+                    finished_tiles[item] = "DONE"
+                    main_logger.info(f"  [{_ri}/{len(_memory_retry_items)}] {item} retry DONE ({_format_elapsed(_retry_elapsed_s)})")
+                except Exception as _re:
+                    _retry_elapsed_s = time.time() - _retry_start_times[item]
+                    tile_results[item]["error"] = f"retry failed: {_re}"
+                    main_logger.info(f"  [{_ri}/{len(_memory_retry_items)}] {item} retry FAILED ({_format_elapsed(_retry_elapsed_s)}): {_re}")
 
     # Final summary written to 4_logfile.log
     main_logger.info("")

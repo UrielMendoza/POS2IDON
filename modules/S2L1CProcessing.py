@@ -266,7 +266,7 @@ def collect_s2l1c_cdse_by_tile(tile_id, sensing_period, output_folder):
     return log_list
 
 #######################################################################################################################################
-def ACacolite(FilesToAC, OutputFolder, EDuser, EDpass, ROI):
+def ACacolite(FilesToAC, OutputFolder, EDuser, EDpass, ROI, low_memory=False):
     """
     This function applies atmospheric correction to Sentinel-2 L1C products using ACOLITE.
     Input: FilesToAC - List with paths (strings) of products to process.
@@ -274,6 +274,9 @@ def ACacolite(FilesToAC, OutputFolder, EDuser, EDpass, ROI):
            EDuser - EarthData user as string.
            EDpass - EarthData password as string.
            ROI - SentinelHub EOBrowser (https://apps.sentinel-hub.com/eo-browser/) dictionary format.
+           low_memory - If True, use dsf_aot_estimate='fixed' to reduce RAM usage at the cost
+                        of slightly less accurate aerosol estimation. Use for tiles that otherwise
+                        exceed server memory limits.
     Output: Atmospherically Corrected products (L2).
     """
     # Define settings
@@ -293,9 +296,14 @@ def ACacolite(FilesToAC, OutputFolder, EDuser, EDpass, ROI):
         N = ROI['coordinates'][0][2][1]
         E = ROI['coordinates'][0][2][0]
         settings['limit'] = S, W, N, E
-    # Dark Spectrum Fitting options: 
-    # Aerosol correction (fixed/tiled is default)
-    settings['dsf_aot_estimate'] = 'tiled'
+    # Dark Spectrum Fitting options:
+    # 'tiled'  — per-tile AOT estimation (accurate, high RAM).
+    # 'fixed'  — single fixed AOT=0.1 (low RAM, use for memory-constrained tiles).
+    if low_memory:
+        settings['dsf_aot_estimate'] = 'fixed'
+        settings['dsf_fixed_aot'] = 0.1
+    else:
+        settings['dsf_aot_estimate'] = 'tiled'
     # Residual Glint correction  (False is default) (if True: Default or Alternative (only possible with "fixed" option) methods)
     settings['dsf_residual_glint_correction'] = True
     settings['dsf_residual_glint_correction_method'] = 'default'

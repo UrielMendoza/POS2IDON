@@ -205,17 +205,28 @@ parallel_processing = True
 # None - Use os.cpu_count().
 # Integer - Use exactly that many workers.
 # Other inputs besides None or positive int will stop the pré-start.
-parallel_max_workers = 3
+parallel_max_workers = 6
 
 # Memory limit per worker process in GB.
-# Tiles that exceed this threshold are killed early (freeing the worker slot)
-# and then automatically retried one at a time without a memory limit, so
-# heavy tiles always complete without manual intervention.
-# Rule: (total_RAM_GB * 0.8) / parallel_max_workers  →  251*0.8/3 ≈ 67 GB.
-# Use 80 to give headroom; tiles >80 GB get auto-retried solo.
-# None - disables the watchdog entirely (not recommended for parallel runs).
+# Tiles that exceed this limit are killed early and auto-retried (see below).
+# Rule: (total_RAM_GB * 0.8) / parallel_max_workers  →  251*0.8/6 ≈ 33 GB.
+# Use 40 to allow some headroom while keeping 6×40=240 GB < 251 GB.
+# Tiles >40 GB go to the retry phase where they run with fewer workers.
+# None - disables the watchdog (not recommended for parallel runs).
 # Other inputs besides None or positive number will stop the pré-start.
-memory_limit_per_worker_gb = 80
+memory_limit_per_worker_gb = 40
+
+# Number of parallel workers used in the AUTO-RETRY phase.
+# Retry tiles are heavy (40–90 GB each). Safe max = floor(251 GB / 90 GB) = 2.
+# Other inputs besides positive int will stop the pré-start.
+memory_retry_workers = 2
+
+# Tiles that require low-memory ACOLITE settings (dsf_aot_estimate='fixed').
+# Use for tiles that exceed server RAM even when running alone.
+# 'fixed' uses a constant AOT=0.1 — slightly less accurate but fits in RAM.
+# List of tile ID strings, or empty list [] to disable.
+# Other inputs besides list of strings will stop the pré-start.
+low_memory_tiles = ["16QEJ"]
 
 
 # Delete processed folders and files:
