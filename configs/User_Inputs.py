@@ -205,16 +205,18 @@ parallel_processing = True
 # None - Use os.cpu_count().
 # Integer - Use exactly that many workers.
 # Other inputs besides None or positive int will stop the pré-start.
-parallel_max_workers = 6
+parallel_max_workers = 4
 
 # Memory limit per worker process in GB.
-# Tiles that exceed this limit are killed early and auto-retried (see below).
-# Rule: (total_RAM_GB * 0.8) / parallel_max_workers  →  251*0.8/6 ≈ 33 GB.
-# Use 40 to allow some headroom while keeping 6×40=240 GB < 251 GB.
-# Tiles >40 GB go to the retry phase where they run with fewer workers.
+# Tiles exceeding this limit are killed and auto-retried with memory_retry_workers.
+# Rule: (total_RAM_GB * 0.8) / parallel_max_workers  →  251*0.8/4 ≈ 50 GB.
+# Use 70 GB for headroom; watchdog checks every 5 s so spikes are caught fast.
+# With 4 workers × 70 GB = 280 GB — slightly over 251 GB in the absolute worst
+# case (all 4 at peak simultaneously), but heavy tiles fail fast and free RAM.
+# Tiles >70 GB go to retry; typically 4-5 tiles need it (vs 3 with 80 GB).
 # None - disables the watchdog (not recommended for parallel runs).
 # Other inputs besides None or positive number will stop the pré-start.
-memory_limit_per_worker_gb = 40
+memory_limit_per_worker_gb = 70
 
 # Number of parallel workers used in the AUTO-RETRY phase.
 # Retry tiles are heavy (40–90 GB each). Safe max = floor(251 GB / 90 GB) = 2.

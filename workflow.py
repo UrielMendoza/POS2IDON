@@ -172,8 +172,11 @@ def process_tile(current_item):
     _set_stage("SEARCHING")
     main_logger.info("SEARCH PRODUCTS")
     if search == True:
-        # Create folder to store products
-        CreateBrandNewFolder(s2l1c_products_folder)
+        # Preserve existing downloaded products: only create the folder if it
+        # doesn't exist yet. CreateBrandNewFolder would wipe already-downloaded
+        # .SAFE files, forcing a re-download during auto-retry (which can fail
+        # due to CDSE rate limiting when 2 tiles retry simultaneously).
+        os.makedirs(s2l1c_products_folder, exist_ok=True)
 
         # Sensing Period definition
         local_sensing_period = sensing_period
@@ -646,7 +649,7 @@ if pre_start_flag == 1:
                 ps = psutil.Process(proc.pid)
             except Exception:
                 return
-            while not _kill_event.wait(15):
+            while not _kill_event.wait(5):
                 if proc.poll() is not None:
                     break
                 try:
