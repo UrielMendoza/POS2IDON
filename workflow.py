@@ -824,10 +824,17 @@ if pre_start_flag == 1:
     # Heavy tiles (>80 GB RSS) can exceed memory_limit_per_worker_gb when
     # running concurrently. Re-run them one at a time with no limit so they
     # always complete without manual intervention (needed for 60-date runs).
+    def _needs_retry(err):
+        if not err:
+            return False
+        return (
+            "memory" in err.lower()           # watchdog kill
+            or "exit code -9" in err          # kernel OOM before watchdog fired
+        )
     _memory_retry_items = [
         item for item in processing_items
         if tile_results.get(item, {}).get("status") == "FAILED"
-        and "memory" in (tile_results.get(item, {}).get("error") or "").lower()
+        and _needs_retry(tile_results.get(item, {}).get("error"))
     ]
     if _memory_retry_items:
         main_logger.info("")
@@ -837,11 +844,17 @@ if pre_start_flag == 1:
         main_logger.info("=" * 70)
         _memory_limit_gb = None  # closure picks up new value; no limit for retry
 
-        # Clean up partial ACOLITE/masking output before submitting retries.
+        # Clean up partial output before submitting retries.
+        # Also remove the S2L1C folder: a memory kill during download leaves a
+        # partial/corrupted .SAFE file that ACOLITE cannot process. With
+        # os.makedirs(exist_ok=True) that file would be reused and cause
+        # an immediate exit-code-1 failure in the retry subprocess.
         import shutil as _shutil
         _retry_start_times = {}
         for item in _memory_retry_items:
-            for _pfx in ("1_Atmospheric_Corrected_Products", "2_Masked_Products"):
+            for _pfx in ("0_S2L1C_Products",
+                         "1_Atmospheric_Corrected_Products",
+                         "2_Masked_Products"):
                 _partial = os.path.join(base_output_dir, f"{_pfx}_{item}_{sensing_period[0]}")
                 if os.path.exists(_partial):
                     _shutil.rmtree(_partial, ignore_errors=True)
