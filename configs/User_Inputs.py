@@ -228,7 +228,7 @@ memory_retry_workers = 2
 # 'fixed' uses a constant AOT=0.1 — slightly less accurate but fits in RAM.
 # List of tile ID strings, or empty list [] to disable.
 # Other inputs besides list of strings will stop the pré-start.
-low_memory_tiles = ["16QEJ"]
+low_memory_tiles = []
 
 
 # Delete processed folders and files:

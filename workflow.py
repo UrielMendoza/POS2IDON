@@ -223,7 +223,10 @@ def process_tile(current_item):
                 CreateBrandNewFolder(masked_products_folder)
             if masking_options["use_existing_ESAwc"] == False:
                 esa_wc_folder = os.path.join(base_output_dir, "2-1_ESA_Worldcover")
-                CreateBrandNewFolder(esa_wc_folder)
+                # Use makedirs instead of CreateBrandNewFolder: all tiles share this
+                # folder. Deleting it while a concurrent tile is reading its WorldCover
+                # files causes a race condition (masking fails → no classification TIF).
+                os.makedirs(esa_wc_folder, exist_ok=True)
             else:
                 esa_wc_folder = os.path.join(base_output_dir, "2-1_ESA_Worldcover")
             if classification == True:
