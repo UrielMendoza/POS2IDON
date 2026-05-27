@@ -638,6 +638,32 @@ if pre_start_flag == 1:
         main_logger.info(f"Skipping {len(_already_done)} already-finished tile(s): {' '.join(_already_done)}")
     processing_items = _pending_items
 
+    # If fewer tiles are pending than worker slots, the effective concurrency drops,
+    # so the per-worker memory limit can be raised or disabled.  When only 1 tile
+    # will run, the full server RAM is available and the watchdog limit would kill it
+    # unnecessarily (e.g. 16QEJ uses 74 GB alone on a 251 GB server).
+    if _memory_limit_gb is not None and len(processing_items) < _max_workers:
+        if len(processing_items) <= 1:
+            _memory_limit_gb = None
+            main_logger.info("Only 1 pending tile — memory watchdog disabled (full RAM available)")
+        else:
+            import math
+            _total_ram_gb = None
+            try:
+                import psutil as _psutil_ram
+                _total_ram_gb = _psutil_ram.virtual_memory().total / (1024 ** 3)
+            except Exception:
+                pass
+            if _total_ram_gb:
+                _effective_limit = math.floor(_total_ram_gb * 0.85 / len(processing_items))
+                if _effective_limit > _memory_limit_gb:
+                    main_logger.info(
+                        f"Only {len(processing_items)} pending tile(s) — raising memory limit "
+                        f"from {_memory_limit_gb} GB to {_effective_limit} GB "
+                        f"(85% of {_total_ram_gb:.0f} GB / {len(processing_items)} tiles)"
+                    )
+                    _memory_limit_gb = _effective_limit
+
     total = len(_all_items)
     completed_count = len(_already_done)
     failed_count = 0
