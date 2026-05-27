@@ -619,8 +619,27 @@ if pre_start_flag == 1:
     _memory_limit_gb = memory_limit_per_worker_gb if 'memory_limit_per_worker_gb' in vars() else None
     _retry_max_workers = memory_retry_workers if 'memory_retry_workers' in vars() else 2
 
-    total = len(processing_items)
-    completed_count = 0
+    # Skip tiles that already have a finished classification TIF for this date.
+    # Enables resuming an interrupted run without re-processing completed tiles.
+    _all_items = list(processing_items)  # full list preserved for dashboard/summary
+    _already_done = []
+    _pending_items = []
+    for _item in processing_items:
+        if _search_by == "tile":
+            _clf_dir = os.path.join(base_output_dir, f"3_Classification_Results_{_item}_{sensing_period[0]}")
+        else:
+            _clf_dir = classification_products_folder
+        _existing = glob.glob(os.path.join(_clf_dir, "*", "sc_maps", "*-scmap.tif"))
+        if _existing:
+            _already_done.append(_item)
+        else:
+            _pending_items.append(_item)
+    if _already_done:
+        main_logger.info(f"Skipping {len(_already_done)} already-finished tile(s): {' '.join(_already_done)}")
+    processing_items = _pending_items
+
+    total = len(_all_items)
+    completed_count = len(_already_done)
     failed_count = 0
     item_start_times = {}
 
@@ -692,7 +711,7 @@ if pre_start_flag == 1:
     import threading
     _dashboard_stop = threading.Event()
     _dashboard_refresh = 30  # seconds between dashboard prints
-    finished_tiles = {}  # item -> "DONE" | "FAILED"  (set by parent when subprocess returns)
+    finished_tiles = {_item: "DONE" for _item in _already_done}
     started_tiles = set()  # items whose subprocess has actually been launched
 
     # Clean up stale status files left over from a previous run that died abruptly.
@@ -727,7 +746,7 @@ if pre_start_flag == 1:
         lines = []
         lines.append("")
         lines.append(f"=== STATUS @ {time.strftime('%H:%M:%S')}  total {total_elapsed}  ({completed_count} done / {failed_count} failed of {total}) ===")
-        for idx, item in enumerate(processing_items, 1):
+        for idx, item in enumerate(_all_items, 1):
             # If parent already knows the final outcome, show that
             if item in finished_tiles:
                 stage = finished_tiles[item]
@@ -754,8 +773,12 @@ if pre_start_flag == 1:
             except Exception:
                 pass
 
-    # Per-tile result tracking for the final summary
-    tile_results = {}  # item -> {"status": "DONE"|"FAILED", "elapsed_s": float, "error": str|None}
+    # Per-tile result tracking for the final summary. Pre-populated with tiles that
+    # were skipped because their classification TIF already existed from a prior run.
+    tile_results = {
+        _item: {"status": "DONE", "elapsed_s": 0, "error": "(already done — skipped)"}
+        for _item in _already_done
+    }
 
     if _parallel and total > 1:
         main_logger.info(f"Running {total} items in parallel with {_max_workers} workers (isolated subprocesses)")
@@ -897,7 +920,7 @@ if pre_start_flag == 1:
     main_logger.info("")
     main_logger.info(f"  {'#':>3}  {'Tile':6s}  {'Status':6s}  {'Elapsed':10s}  Error")
     main_logger.info(f"  {'-'*3}  {'-'*6}  {'-'*6}  {'-'*10}  {'-'*30}")
-    for idx, item in enumerate(processing_items, 1):
+    for idx, item in enumerate(_all_items, 1):
         r = tile_results.get(item, {"status": "?", "elapsed_s": 0, "error": None})
         err = r["error"] or ""
         main_logger.info(f"  {idx:>3}  {item:6s}  {r['status']:6s}  {_format_elapsed(r['elapsed_s']):10s}  {err}")
@@ -907,7 +930,7 @@ if pre_start_flag == 1:
     # main log so the summary is self-contained. Whether to delete the per-tile
     # files afterwards depends on keep_only_classification.
     _keep_only_classification = keep_only_classification if 'keep_only_classification' in vars() else False
-    for item in processing_items:
+    for item in _all_items:
         per_tile_log = f"4_logfile_{item}.log"
         if not os.path.exists(per_tile_log):
             continue
