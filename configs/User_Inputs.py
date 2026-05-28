@@ -278,7 +278,7 @@ parallel_max_workers = 4
 # Tiles >70 GB go to retry; typically 4-5 tiles need it (vs 3 with 80 GB).
 # None - disables the watchdog (not recommended for parallel runs).
 # Other inputs besides None or positive number will stop the pré-start.
-memory_limit_per_worker_gb = 70
+memory_limit_per_worker_gb = None  # handled dynamically per batch via batch_workers
 
 # Number of parallel workers used in the AUTO-RETRY phase.
 # Retry tiles are heavy (40–90 GB each). Safe max = floor(251 GB / 90 GB) = 2.

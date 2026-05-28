@@ -707,6 +707,31 @@ if pre_start_flag == 1:
     def _needs_retry(err):
         return bool(err) and ("memory" in err.lower() or "exit code -9" in err)
 
+    def _print_progress(date_idx, n_dates, current_date, grand_done, grand_total,
+                        grand_failed, stage="EN PROCESO"):
+        """Print an ASCII progress bar showing date and tile-date advancement."""
+        dates_done = date_idx - 1  # fully completed dates before the current one
+        pct_dates = dates_done / n_dates * 100 if n_dates else 0
+        pct_tiles = grand_done / grand_total * 100 if grand_total else 0
+        bar_w = 34
+        d_filled = int(bar_w * dates_done / n_dates) if n_dates else 0
+        t_filled = int(bar_w * grand_done / grand_total) if grand_total else 0
+        d_bar = "█" * d_filled + "░" * (bar_w - d_filled)
+        t_bar = "█" * t_filled + "░" * (bar_w - t_filled)
+        sep = "─" * 70
+        lines = [
+            sep,
+            f"  Fecha actual : {current_date}  [{date_idx}/{n_dates}]  — {stage}",
+            f"  Fechas       : [{d_bar}] {pct_dates:5.1f}%  ({dates_done}/{n_dates} completas)",
+            f"  Tile-fechas  : [{t_bar}] {pct_tiles:5.1f}%  ({grand_done}/{grand_total}"
+            + (f", {grand_failed} fallidos" if grand_failed else "") + ")",
+            sep,
+        ]
+        sys.stdout.write("\n" + "\n".join(lines) + "\n\n")
+        sys.stdout.flush()
+        for line in lines:
+            main_logger.info(line)
+
     if _search_by == "tile":
         # ── Multi-date / tile-batch orchestrator ──────────────────────────────
         _tile_batches = tile_batches if 'tile_batches' in vars() else [tiles if 'tiles' in vars() else []]
@@ -732,10 +757,9 @@ if pre_start_flag == 1:
             year_dir = os.path.join(base_output_dir, year)
             os.makedirs(year_dir, exist_ok=True)
 
-            main_logger.info("")
-            main_logger.info("=" * 70)
-            main_logger.info(f"DATE {date_idx}/{len(_sensing_dates_list)}: {current_date}  →  {year_dir}/")
-            main_logger.info("=" * 70)
+            _print_progress(date_idx, len(_sensing_dates_list), current_date,
+                            grand_done, grand_total, grand_failed)
+            main_logger.info(f"  Resultados → {year_dir}/")
 
             date_done = 0
             date_failed = 0
@@ -862,10 +886,10 @@ if pre_start_flag == 1:
                     except FileNotFoundError:
                         pass
 
-            main_logger.info(
-                f"DATE {current_date} complete: {date_done} done, {date_failed} failed"
-                f"  [grand: {grand_done}/{grand_total}]"
-            )
+            _print_progress(date_idx, len(_sensing_dates_list), current_date,
+                            grand_done, grand_total, grand_failed,
+                            stage=f"COMPLETA  ✓{date_done}"
+                                  + (f"  ✗{date_failed}" if date_failed else ""))
 
         # Clean shared ESA WorldCover folder after all dates are done
         esa_wc_folder = os.path.join(base_output_dir, "2-1_ESA_Worldcover")
