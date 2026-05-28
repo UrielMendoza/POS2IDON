@@ -707,6 +707,21 @@ if pre_start_flag == 1:
     def _needs_retry(err):
         return bool(err) and ("memory" in err.lower() or "exit code -9" in err)
 
+    def _read_stage(item):
+        """Read the current stage written by the subprocess to its status file."""
+        path = f"4_status_{item}.txt"
+        if not os.path.exists(path):
+            return ("PENDING", None)
+        try:
+            with open(path) as f:
+                line = f.read().strip()
+            if "|" in line:
+                stage, ts = line.split("|", 1)
+                return (stage, int(ts))
+            return (line, None)
+        except Exception:
+            return ("?", None)
+
     def _print_progress(date_idx, n_dates, current_date, grand_done, grand_total,
                         grand_failed, stage="EN PROCESO"):
         """Print an ASCII progress bar showing date and tile-date advancement."""
@@ -807,6 +822,37 @@ if pre_start_flag == 1:
 
                 item_start_times = {tile: time.time() for tile in pending}
                 batch_results = {}
+                _batch_done = {}  # tile -> display string, filled as futures resolve
+
+                def _batch_dashboard():
+                    now = time.time()
+                    header = (
+                        f"\n  [Batch {batch_idx+1}/{len(_tile_batches)}"
+                        f"  fecha {current_date}  {time.strftime('%H:%M:%S')}]"
+                    )
+                    rows = []
+                    for t in pending:
+                        if t in _batch_done:
+                            rows.append(f"    {t:8s}  {_batch_done[t]}")
+                        else:
+                            stage, ts = _read_stage(t)
+                            age = (_format_elapsed(now - ts) if ts
+                                   else _format_elapsed(now - item_start_times.get(t, now)))
+                            rows.append(f"    {t:8s}  {stage:<22s}  {age}")
+                    sys.stdout.write(header + "\n" + "\n".join(rows) + "\n")
+                    sys.stdout.flush()
+
+                _dash_stop = threading.Event()
+
+                def _dash_loop():
+                    while not _dash_stop.wait(30):
+                        try:
+                            _batch_dashboard()
+                        except Exception:
+                            pass
+
+                _dash_thread = threading.Thread(target=_dash_loop, daemon=True)
+                _dash_thread.start()
 
                 with ThreadPoolExecutor(max_workers=n_workers) as ex:
                     futures = {
@@ -824,6 +870,7 @@ if pre_start_flag == 1:
                             batch_results[tile] = {"status": "DONE", "error": None}
                             date_done += 1
                             grand_done += 1
+                            _batch_done[tile] = f"DONE ({_format_elapsed(elapsed_s)})"
                             main_logger.info(f"    {tile} DONE ({_format_elapsed(elapsed_s)})")
                             try:
                                 _move_and_clean(tile, current_date, year_dir)
@@ -833,7 +880,12 @@ if pre_start_flag == 1:
                             batch_results[tile] = {"status": "FAILED", "error": str(e)}
                             date_failed += 1
                             grand_failed += 1
+                            _batch_done[tile] = f"FAILED ({_format_elapsed(elapsed_s)})"
                             main_logger.info(f"    {tile} FAILED ({_format_elapsed(elapsed_s)}): {e}")
+
+                _dash_stop.set()
+                _dash_thread.join(timeout=2)
+                _batch_dashboard()  # snapshot final al terminar el lote
 
                 # Auto-retry tiles that failed due to memory pressure (no limit in retry)
                 retry_tiles = [
