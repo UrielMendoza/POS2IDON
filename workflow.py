@@ -157,7 +157,6 @@ def process_tile(current_item):
     except ImportError:
         _low_memory_classify_tiles = []
     if current_item in _low_memory_classify_tiles:
-        classification_options = dict(classification_options)
         classification_options["split_and_mosaic"] = True
 
     # Determine search mode and resolve folder paths (locals to avoid UnboundLocalError)
