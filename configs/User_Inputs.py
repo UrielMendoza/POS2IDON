@@ -28,14 +28,26 @@ zone_name = "TUL"
 # Other inputs besides string will stop the pré-start.
 search_by = "tile"
 
-# List of Sentinel-2 tile IDs to process (used when search_by = "tile").
-# Each tile generates its own set of output folders and is processed independently.
-# Other inputs besides non-empty list of strings will stop the pré-start.
-# Light tiles first so workers free up sooner; heavy tiles (>80 GB) go last
-# because the pipeline auto-retries them solo if they fail due to memory.
-tiles = ["16QDG","16PEC","16QED","16PCC","16PDC","16QEE","16QDD","16QEF",
-         "16QEH","16QCF","16QDJ","16QDF","16QCD","16QEG",
-         "16QDE","16QCE","16QDH","16QEJ"]
+# Tiles grouped into sequential batches. Batches run one at a time; tiles within
+# each batch run in parallel. Group light tiles together and heavy tiles together
+# so each batch gets a consistent memory budget per worker.
+# Batch 1 – lightest  (5 tiles, 5 workers  → 251×0.85/5 ≈ 42 GB each)
+# Batch 2 – medium    (5 tiles, 4 workers  → 251×0.85/4 ≈ 53 GB each)
+# Batch 3 – heavy     (4 tiles, 3 workers  → 251×0.85/3 ≈ 71 GB each)
+# Batch 4 – heaviest  (4 tiles, 2 workers  → 251×0.85/2 ≈ 106 GB each)
+tile_batches = [
+    ["16QDG", "16PEC", "16QED", "16PCC", "16PDC"],
+    ["16QEE", "16QDD", "16QEF", "16QEH", "16QCF"],
+    ["16QDJ", "16QDF", "16QCD", "16QEG"],
+    ["16QDE", "16QCE", "16QDH", "16QEJ"],
+]
+
+# Number of parallel workers for each batch (one integer per batch).
+# Fewer workers per batch → more RAM per tile → fewer OOM retries.
+batch_workers = [5, 4, 3, 2]
+
+# Flat tile list derived from batches (used internally and for backward compat).
+tiles = [t for batch in tile_batches for t in batch]
 
 # SEARCH ###################################################################################
 
@@ -77,7 +89,57 @@ service = "CDSE"
 # --- PRUEBA 4: Tulum, Mexico - extendido al mar Caribe - Tile 16QDH (06 Nov 2025) ---
 service_options = {"filter": "T16QDH"}
 roi = {"type":"Polygon","coordinates":[[[-87.60,19.90],[-87.60,20.45],[-86.70,20.45],[-86.70,19.90],[-87.60,19.90]]]}
-sensing_period = ('20180427', '20180427')
+
+# List of sensing dates to process in the multi-date batch run.
+# Each date is a string 'YYYYMMDD'. The pipeline processes every date sequentially;
+# within each date, tiles run in parallel per tile_batches above.
+# Dates are grouped by actual calendar year (even if the sargassum season crosses years).
+# Results are saved to base_output_dir/YEAR/  (one subfolder per calendar year).
+sensing_dates = [
+    # 2016
+    '20160527', '20160616', '20160706',          # sargazo
+    '20161014', '20161103', '20161113',          # no sargazo
+    # 2017
+    '20170115', '20170201', '20170316',          # no sargazo
+    '20170405', '20170502', '20170611',          # sargazo
+    # 2018
+    '20180427', '20180507', '20180527',          # sargazo
+    '20180914', '20181113',                      # no sargazo
+    # 2019
+    '20190112',                                  # no sargazo (2018 season, calendar 2019)
+    '20190502', '20190611', '20190621',          # sargazo
+    '20190919', '20191024',                      # no sargazo
+    # 2020
+    '20200216',                                  # no sargazo (2019 season, calendar 2020)
+    '20200610', '20200720', '20200809',          # sargazo
+    '20201112',                                  # no sargazo
+    # 2021
+    '20210106', '20210210',                      # no sargazo (2020 season, calendar 2021)
+    '20210411', '20210516', '20210809',          # sargazo
+    '20211007', '20211018',                      # no sargazo
+    # 2022
+    '20220126',                                  # no sargazo (2021 season, calendar 2022)
+    '20220605', '20220610', '20220705',          # sargazo
+    '20220923', '20221222',                      # no sargazo
+    # 2023
+    '20230210',                                  # no sargazo (2022 season, calendar 2023)
+    '20230526', '20230610', '20230715',          # sargazo
+    '20231207', '20231227',                      # no sargazo
+    # 2024
+    '20240106', '20240111',                      # no sargazo (2023 season, calendar 2024)
+    '20240311', '20240425', '20240430', '20240604', '20240619',  # sargazo
+    '20241116', '20241201', '20241231',          # no sargazo
+    # 2025
+    '20250120',                                  # no sargazo (2024 season, calendar 2025)
+    '20250306', '20250520', '20250629', '20250818',  # sargazo
+    '20251101', '20251226', '20251231',          # no sargazo
+    # 2026
+    '20260105',                                  # no sargazo (2025 season, calendar 2026)
+    '20260301', '20260316', '20260410',          # sargazo
+]
+
+# Single sensing_period kept for backward compat (ROI mode, NRT mode, single-date runs).
+sensing_period = (sensing_dates[0], sensing_dates[0])
 
 # Near real time sensing period:
 # Uses yesterday as start date and today as end date.

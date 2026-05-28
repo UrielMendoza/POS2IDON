@@ -21,6 +21,12 @@ if "--tile" in sys.argv:
     if _idx + 1 < len(sys.argv):
         _single_tile_mode = sys.argv[_idx + 1]
 
+_single_date_mode = None
+if "--date" in sys.argv:
+    _idx = sys.argv.index("--date")
+    if _idx + 1 < len(sys.argv):
+        _single_date_mode = sys.argv[_idx + 1]
+
 # Start logging. The orchestrator writes to 4_logfile.log (overwrite); each subprocess
 # worker appends to 4_logfile_<tile>.log via its own per-tile logger.
 try:
@@ -159,16 +165,21 @@ def process_tile(current_item):
     if current_item in _low_memory_classify_tiles:
         classification_options["split_and_mosaic"] = True
 
+    # Determine the sensing date for this subprocess run.
+    # --date YYYYMMDD overrides the global sensing_period from User_Inputs.
+    _current_date = _single_date_mode if _single_date_mode else sensing_period[0]
+    _current_sensing_period = (_current_date, _current_date)
+
     # Determine search mode and resolve folder paths (locals to avoid UnboundLocalError)
     _search_by = search_by if 'search_by' in globals() else "roi"
     if _search_by == "tile":
         current_tile = current_item
         current_roi = None  # full tile, no ROI clipping in ACOLITE
-        s2l1c_products_folder = os.path.join(base_output_dir, f"0_S2L1C_Products_{current_tile}_{sensing_period[0]}")
-        ac_products_folder = os.path.join(base_output_dir, f"1_Atmospheric_Corrected_Products_{current_tile}_{sensing_period[0]}")
-        masked_products_folder = os.path.join(base_output_dir, f"2_Masked_Products_{current_tile}_{sensing_period[0]}")
-        classification_products_folder = os.path.join(base_output_dir, f"3_Classification_Results_{current_tile}_{sensing_period[0]}")
-        main_logger.info(f"=== TILE: {current_tile} ===")
+        s2l1c_products_folder = os.path.join(base_output_dir, f"0_S2L1C_Products_{current_tile}_{_current_date}")
+        ac_products_folder = os.path.join(base_output_dir, f"1_Atmospheric_Corrected_Products_{current_tile}_{_current_date}")
+        masked_products_folder = os.path.join(base_output_dir, f"2_Masked_Products_{current_tile}_{_current_date}")
+        classification_products_folder = os.path.join(base_output_dir, f"3_Classification_Results_{current_tile}_{_current_date}")
+        main_logger.info(f"=== TILE: {current_tile}  DATE: {_current_date} ===")
     else:
         current_tile = None
         current_roi = roi  # ROI clipping applied in ACOLITE
@@ -188,7 +199,7 @@ def process_tile(current_item):
         os.makedirs(s2l1c_products_folder, exist_ok=True)
 
         # Sensing Period definition
-        local_sensing_period = sensing_period
+        local_sensing_period = _current_sensing_period
         if nrt_sensing_period == True:
             main_logger.info("Using Yesterday date as Start Date")
             local_sensing_period = NearRealTimeSensingDate()
@@ -609,97 +620,35 @@ if _single_tile_mode is not None:
         sys.exit(2)
 
 if pre_start_flag == 1:
-
-    # Determine search mode and build the list of items to iterate over
-    _search_by = search_by if 'search_by' in vars() else "roi"
-    _tiles = tiles if 'tiles' in vars() else []
-
-    if _search_by == "tile":
-        processing_items = _tiles
-    else:
-        processing_items = [zone_name]
-
-    # Read parallel options (defaults if not present in User_Inputs)
-    _parallel = parallel_processing if 'parallel_processing' in vars() else True
-    _max_workers = parallel_max_workers if 'parallel_max_workers' in vars() else None
-    if _max_workers is None:
-        _max_workers = os.cpu_count() or 1
-    _max_workers = min(_max_workers, len(processing_items)) if processing_items else 1
-    _memory_limit_gb = memory_limit_per_worker_gb if 'memory_limit_per_worker_gb' in vars() else None
-    _retry_max_workers = memory_retry_workers if 'memory_retry_workers' in vars() else 2
-
-    # Skip tiles that already have a finished classification TIF for this date.
-    # Enables resuming an interrupted run without re-processing completed tiles.
-    _all_items = list(processing_items)  # full list preserved for dashboard/summary
-    _already_done = []
-    _pending_items = []
-    for _item in processing_items:
-        if _search_by == "tile":
-            _clf_dir = os.path.join(base_output_dir, f"3_Classification_Results_{_item}_{sensing_period[0]}")
-        else:
-            _clf_dir = classification_products_folder
-        _existing = glob.glob(os.path.join(_clf_dir, "*", "sc_maps", "*-scmap.tif"))
-        if _existing:
-            _already_done.append(_item)
-        else:
-            _pending_items.append(_item)
-    if _already_done:
-        main_logger.info(f"Skipping {len(_already_done)} already-finished tile(s): {' '.join(_already_done)}")
-    processing_items = _pending_items
-
-    # If fewer tiles are pending than worker slots, the effective concurrency drops,
-    # so the per-worker memory limit can be raised or disabled.  When only 1 tile
-    # will run, the full server RAM is available and the watchdog limit would kill it
-    # unnecessarily (e.g. 16QEJ uses 74 GB alone on a 251 GB server).
-    if _memory_limit_gb is not None and len(processing_items) < _max_workers:
-        if len(processing_items) <= 1:
-            _memory_limit_gb = None
-            main_logger.info("Only 1 pending tile — memory watchdog disabled (full RAM available)")
-        else:
-            import math
-            _total_ram_gb = None
-            try:
-                import psutil as _psutil_ram
-                _total_ram_gb = _psutil_ram.virtual_memory().total / (1024 ** 3)
-            except Exception:
-                pass
-            if _total_ram_gb:
-                _effective_limit = math.floor(_total_ram_gb * 0.85 / len(processing_items))
-                if _effective_limit > _memory_limit_gb:
-                    main_logger.info(
-                        f"Only {len(processing_items)} pending tile(s) — raising memory limit "
-                        f"from {_memory_limit_gb} GB to {_effective_limit} GB "
-                        f"(85% of {_total_ram_gb:.0f} GB / {len(processing_items)} tiles)"
-                    )
-                    _memory_limit_gb = _effective_limit
-
-    total = len(_all_items)
-    completed_count = len(_already_done)
-    failed_count = 0
-    item_start_times = {}
+    import math
+    import threading
+    import shutil as _shutil_orch
 
     def _format_elapsed(seconds):
         m, s = divmod(int(seconds), 60)
         h, m = divmod(m, 60)
         return f"{h:d}h{m:02d}m{s:02d}s" if h else f"{m:d}m{s:02d}s"
 
-    def _run_tile_subprocess(item):
-        """Launch a fully isolated Python subprocess to process one tile."""
-        started_tiles.add(item)
-        item_start_times[item] = time.time()
+    _search_by = search_by if 'search_by' in vars() else "roi"
 
-        proc = subprocess.Popen(
-            [sys.executable, sys.argv[0], "--tile", item],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
+    # Get total RAM once for per-batch memory limit calculation
+    _total_ram_gb = 251.0  # safe fallback for tsom01
+    try:
+        import psutil as _psutil_orch
+        _total_ram_gb = _psutil_orch.virtual_memory().total / (1024 ** 3)
+    except Exception:
+        pass
+
+    def _run_tile_subprocess(item, date_str, memory_limit_gb):
+        """Launch a fully isolated Python subprocess to process one tile for one date."""
+        cmd = [sys.executable, sys.argv[0], "--tile", item, "--date", date_str]
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
         _kill_event = threading.Event()
         _kill_reason = [None]
 
         def _mem_watchdog():
-            if _memory_limit_gb is None:
+            if memory_limit_gb is None:
                 return
             try:
                 import psutil
@@ -712,8 +661,8 @@ if pre_start_flag == 1:
                 try:
                     children = ps.children(recursive=True)
                     mem_gb = sum(p.memory_info().rss for p in [ps] + children) / (1024 ** 3)
-                    if mem_gb > _memory_limit_gb:
-                        _kill_reason[0] = f"memory limit {_memory_limit_gb:.0f} GB exceeded ({mem_gb:.1f} GB used)"
+                    if mem_gb > memory_limit_gb:
+                        _kill_reason[0] = f"memory limit {memory_limit_gb:.0f} GB exceeded ({mem_gb:.1f} GB used)"
                         proc.kill()
                         break
                 except Exception:
@@ -721,9 +670,7 @@ if pre_start_flag == 1:
 
         watchdog = threading.Thread(target=_mem_watchdog, daemon=True)
         watchdog.start()
-
         stdout_str, stderr_str = proc.communicate()
-
         _kill_event.set()
         watchdog.join(timeout=2)
 
@@ -743,281 +690,212 @@ if pre_start_flag == 1:
             raise RuntimeError(_kill_reason[0] or f"exit code {proc.returncode}")
         return item
 
-    import threading
-    _dashboard_stop = threading.Event()
-    _dashboard_refresh = 30  # seconds between dashboard prints
-    finished_tiles = {_item: "DONE" for _item in _already_done}
-    started_tiles = set()  # items whose subprocess has actually been launched
+    def _move_and_clean(tile, date_str, year_dir):
+        """Move final scmap TIF to year_dir/ and delete all intermediate folders for tile+date."""
+        clf_dir = os.path.join(base_output_dir, f"3_Classification_Results_{tile}_{date_str}")
+        tifs = glob.glob(os.path.join(clf_dir, "*", "sc_maps", "*-scmap.tif"))
+        for tif in tifs:
+            dest = os.path.join(year_dir, os.path.basename(tif))
+            _shutil_orch.move(tif, dest)
+            main_logger.info(f"    Moved {os.path.basename(tif)} → {os.path.basename(year_dir)}/")
+        for _pfx in ("0_S2L1C_Products", "1_Atmospheric_Corrected_Products",
+                      "2_Masked_Products", "3_Classification_Results"):
+            _d = os.path.join(base_output_dir, f"{_pfx}_{tile}_{date_str}")
+            if os.path.exists(_d):
+                _shutil_orch.rmtree(_d, ignore_errors=True)
 
-    # Clean up stale status files left over from a previous run that died abruptly.
-    # Without this the dashboard would show old "ACOLITE 4h..." entries for tiles
-    # that haven't even started yet in the current run.
-    for item in processing_items:
-        try:
-            os.remove(f"4_status_{item}.txt")
-        except FileNotFoundError:
-            pass
-        except Exception:
-            pass
-
-    def _read_stage(item):
-        """Read the current stage of a tile from its status file."""
-        path = f"4_status_{item}.txt"
-        if not os.path.exists(path):
-            return ("PENDING", None)
-        try:
-            with open(path) as f:
-                line = f.read().strip()
-            if "|" in line:
-                stage, ts = line.split("|", 1)
-                return (stage, int(ts))
-            return (line, None)
-        except Exception:
-            return ("?", None)
-
-    def _print_dashboard():
-        now = time.time()
-        total_elapsed = _format_elapsed(now - POS2IDON_time0)
-        lines = []
-        lines.append("")
-        lines.append(f"=== STATUS @ {time.strftime('%H:%M:%S')}  total {total_elapsed}  ({completed_count} done / {failed_count} failed of {total}) ===")
-        for idx, item in enumerate(_all_items, 1):
-            # If parent already knows the final outcome, show that
-            if item in finished_tiles:
-                stage = finished_tiles[item]
-                stage_elapsed = "-"
-            # Tile waiting in the worker queue (not yet launched)
-            elif item not in started_tiles:
-                stage = "QUEUED"
-                stage_elapsed = "-"
-            else:
-                stage, stage_ts = _read_stage(item)
-                if stage_ts is not None:
-                    stage_elapsed = _format_elapsed(now - stage_ts)
-                else:
-                    stage_elapsed = "-"
-            lines.append(f"  [{idx:>2}/{total}] {item:6s}  {stage:18s}  {stage_elapsed}")
-        lines.append("")
-        sys.stdout.write("\n".join(lines) + "\n")
-        sys.stdout.flush()
-
-    def _dashboard_loop():
-        while not _dashboard_stop.wait(_dashboard_refresh):
-            try:
-                _print_dashboard()
-            except Exception:
-                pass
-
-    # Per-tile result tracking for the final summary. Pre-populated with tiles that
-    # were skipped because their classification TIF already existed from a prior run.
-    tile_results = {
-        _item: {"status": "DONE", "elapsed_s": 0, "error": "(already done — skipped)"}
-        for _item in _already_done
-    }
-
-    if _parallel and total > 1:
-        main_logger.info(f"Running {total} items in parallel with {_max_workers} workers (isolated subprocesses)")
-        main_logger.info(f"Per-tile logs: 4_logfile_<tile>.log  (tail -f to follow)")
-        main_logger.info(f"Dashboard refreshes every {_dashboard_refresh}s on stdout")
-
-        # Start background dashboard thread
-        _dashboard_thread = threading.Thread(target=_dashboard_loop, daemon=True)
-        _dashboard_thread.start()
-
-        with ThreadPoolExecutor(max_workers=_max_workers) as ex:
-            futures = {}
-            for idx, item in enumerate(processing_items, 1):
-                fut = ex.submit(_run_tile_subprocess, item)
-                futures[fut] = (idx, item)
-                item_start_times[item] = time.time()
-                main_logger.info(f"[{idx}/{total}] {item} - submitted")
-
-            for fut in as_completed(futures):
-                idx, item = futures[fut]
-                elapsed_s = time.time() - item_start_times[item]
-                elapsed = _format_elapsed(elapsed_s)
-                try:
-                    fut.result()
-                    completed_count += 1
-                    tile_results[item] = {"status": "DONE", "elapsed_s": elapsed_s, "error": None}
-                    finished_tiles[item] = "DONE"
-                    main_logger.info(f"[{idx}/{total}] {item} - DONE ({elapsed}) [{completed_count} ok / {failed_count} failed]")
-                except Exception as e:
-                    failed_count += 1
-                    tile_results[item] = {"status": "FAILED", "elapsed_s": elapsed_s, "error": str(e)}
-                    finished_tiles[item] = "FAILED"
-                    main_logger.info(f"[{idx}/{total}] {item} - FAILED ({elapsed}): {e} [{completed_count} ok / {failed_count} failed]")
-
-        # Stop dashboard and print one final snapshot
-        _dashboard_stop.set()
-        _dashboard_thread.join(timeout=2)
-        _print_dashboard()
-
-        # Clean up status files
-        for item in processing_items:
-            try:
-                os.remove(f"4_status_{item}.txt")
-            except FileNotFoundError:
-                pass
-            except Exception:
-                pass
-    else:
-        if _parallel and total <= 1:
-            main_logger.info("Only one item to process, running sequentially")
-        else:
-            main_logger.info(f"Running {total} items sequentially")
-        for idx, current_item in enumerate(processing_items, 1):
-            item_start_times[current_item] = time.time()
-            main_logger.info(f"[{idx}/{total}] {current_item} - started")
-            try:
-                process_tile(current_item)
-                completed_count += 1
-                elapsed_s = time.time() - item_start_times[current_item]
-                tile_results[current_item] = {"status": "DONE", "elapsed_s": elapsed_s, "error": None}
-                main_logger.info(f"[{idx}/{total}] {current_item} - DONE ({_format_elapsed(elapsed_s)})")
-            except Exception as e:
-                failed_count += 1
-                elapsed_s = time.time() - item_start_times[current_item]
-                tile_results[current_item] = {"status": "FAILED", "elapsed_s": elapsed_s, "error": str(e)}
-                main_logger.info(f"[{idx}/{total}] {current_item} - FAILED ({_format_elapsed(elapsed_s)}): {e}")
-
-    # ── Auto-retry tiles that failed due to memory pressure ──────────────────
-    # Heavy tiles (>80 GB RSS) can exceed memory_limit_per_worker_gb when
-    # running concurrently. Re-run them one at a time with no limit so they
-    # always complete without manual intervention (needed for 60-date runs).
     def _needs_retry(err):
-        if not err:
-            return False
-        return (
-            "memory" in err.lower()           # watchdog kill
-            or "exit code -9" in err          # kernel OOM before watchdog fired
+        return bool(err) and ("memory" in err.lower() or "exit code -9" in err)
+
+    if _search_by == "tile":
+        # ── Multi-date / tile-batch orchestrator ──────────────────────────────
+        _tile_batches = tile_batches if 'tile_batches' in vars() else [tiles if 'tiles' in vars() else []]
+        _batch_workers_cfg = (
+            batch_workers if 'batch_workers' in vars()
+            else [(parallel_max_workers if 'parallel_max_workers' in vars() else 4)] * len(_tile_batches)
         )
-    _memory_retry_items = [
-        item for item in processing_items
-        if tile_results.get(item, {}).get("status") == "FAILED"
-        and _needs_retry(tile_results.get(item, {}).get("error"))
-    ]
-    if _memory_retry_items:
+        _sensing_dates_list = sensing_dates if 'sensing_dates' in vars() else [sensing_period[0]]
+        _retry_max_workers = memory_retry_workers if 'memory_retry_workers' in vars() else 2
+
+        n_all_tiles = sum(len(b) for b in _tile_batches)
+        grand_total = len(_sensing_dates_list) * n_all_tiles
+        grand_done = 0
+        grand_failed = 0
+
+        main_logger.info(
+            f"Multi-date run: {len(_sensing_dates_list)} dates × {n_all_tiles} tiles"
+            f" = {grand_total} total tile-dates"
+        )
+
+        for date_idx, current_date in enumerate(_sensing_dates_list, 1):
+            year = current_date[:4]
+            year_dir = os.path.join(base_output_dir, year)
+            os.makedirs(year_dir, exist_ok=True)
+
+            main_logger.info("")
+            main_logger.info("=" * 70)
+            main_logger.info(f"DATE {date_idx}/{len(_sensing_dates_list)}: {current_date}  →  {year_dir}/")
+            main_logger.info("=" * 70)
+
+            date_done = 0
+            date_failed = 0
+
+            for batch_idx, batch_tiles in enumerate(_tile_batches):
+                n_workers_cfg = _batch_workers_cfg[batch_idx]
+
+                # Determine which tiles still need processing for this date
+                pending = [
+                    tile for tile in batch_tiles
+                    if not glob.glob(os.path.join(year_dir, f"*T{tile}*-scmap*.tif"))
+                ]
+                skipped_count = len(batch_tiles) - len(pending)
+                if skipped_count:
+                    skipped_names = [t for t in batch_tiles if t not in pending]
+                    main_logger.info(
+                        f"  Batch {batch_idx+1}: skipping {skipped_count} already-done tile(s):"
+                        f" {' '.join(skipped_names)}"
+                    )
+                    date_done += skipped_count
+                    grand_done += skipped_count
+                if not pending:
+                    continue
+
+                n_workers = min(n_workers_cfg, len(pending))
+                if len(pending) == 1:
+                    mem_limit = None
+                    main_logger.info(
+                        f"  Batch {batch_idx+1}/{len(_tile_batches)}: 1 tile solo"
+                        f" — memory watchdog disabled"
+                    )
+                else:
+                    mem_limit = math.floor(_total_ram_gb * 0.85 / n_workers)
+                    main_logger.info(
+                        f"  Batch {batch_idx+1}/{len(_tile_batches)}: {len(pending)} tile(s),"
+                        f" {n_workers} worker(s), mem limit {mem_limit} GB each"
+                    )
+
+                # Clean stale status files from previous runs
+                for tile in pending:
+                    try:
+                        os.remove(f"4_status_{tile}.txt")
+                    except FileNotFoundError:
+                        pass
+
+                item_start_times = {tile: time.time() for tile in pending}
+                batch_results = {}
+
+                with ThreadPoolExecutor(max_workers=n_workers) as ex:
+                    futures = {
+                        ex.submit(_run_tile_subprocess, tile, current_date, mem_limit): tile
+                        for tile in pending
+                    }
+                    for tile in pending:
+                        main_logger.info(f"    Submitted: {tile}")
+
+                    for fut in as_completed(futures):
+                        tile = futures[fut]
+                        elapsed_s = time.time() - item_start_times[tile]
+                        try:
+                            fut.result()
+                            batch_results[tile] = {"status": "DONE", "error": None}
+                            date_done += 1
+                            grand_done += 1
+                            main_logger.info(f"    {tile} DONE ({_format_elapsed(elapsed_s)})")
+                            try:
+                                _move_and_clean(tile, current_date, year_dir)
+                            except Exception as _ce:
+                                main_logger.info(f"    WARNING: cleanup failed for {tile}: {_ce}")
+                        except Exception as e:
+                            batch_results[tile] = {"status": "FAILED", "error": str(e)}
+                            date_failed += 1
+                            grand_failed += 1
+                            main_logger.info(f"    {tile} FAILED ({_format_elapsed(elapsed_s)}): {e}")
+
+                # Auto-retry tiles that failed due to memory pressure (no limit in retry)
+                retry_tiles = [
+                    t for t, r in batch_results.items()
+                    if r["status"] == "FAILED" and _needs_retry(r["error"])
+                ]
+                if retry_tiles:
+                    main_logger.info(f"  AUTO-RETRY {len(retry_tiles)} tile(s): {' '.join(retry_tiles)}")
+                    for tile in retry_tiles:
+                        for _pfx in ("0_S2L1C_Products", "1_Atmospheric_Corrected_Products",
+                                     "2_Masked_Products"):
+                            _d = os.path.join(base_output_dir, f"{_pfx}_{tile}_{current_date}")
+                            if os.path.exists(_d):
+                                _shutil_orch.rmtree(_d, ignore_errors=True)
+                        date_failed -= 1
+                        grand_failed -= 1
+
+                    rw = min(_retry_max_workers, len(retry_tiles))
+                    item_start_times.update({tile: time.time() for tile in retry_tiles})
+                    with ThreadPoolExecutor(max_workers=rw) as ex:
+                        futures = {
+                            ex.submit(_run_tile_subprocess, tile, current_date, None): tile
+                            for tile in retry_tiles
+                        }
+                        for fut in as_completed(futures):
+                            tile = futures[fut]
+                            elapsed_s = time.time() - item_start_times[tile]
+                            try:
+                                fut.result()
+                                batch_results[tile] = {"status": "DONE", "error": "(retried)"}
+                                date_done += 1
+                                grand_done += 1
+                                main_logger.info(f"    RETRY {tile} DONE ({_format_elapsed(elapsed_s)})")
+                                try:
+                                    _move_and_clean(tile, current_date, year_dir)
+                                except Exception as _ce:
+                                    main_logger.info(f"    WARNING: cleanup failed for {tile}: {_ce}")
+                            except Exception as e:
+                                batch_results[tile]["error"] = f"retry failed: {e}"
+                                date_failed += 1
+                                grand_failed += 1
+                                main_logger.info(
+                                    f"    RETRY {tile} FAILED ({_format_elapsed(elapsed_s)}): {e}"
+                                )
+
+                # Clean status files after batch
+                for tile in pending:
+                    try:
+                        os.remove(f"4_status_{tile}.txt")
+                    except FileNotFoundError:
+                        pass
+
+            main_logger.info(
+                f"DATE {current_date} complete: {date_done} done, {date_failed} failed"
+                f"  [grand: {grand_done}/{grand_total}]"
+            )
+
+        # Clean shared ESA WorldCover folder after all dates are done
+        esa_wc_folder = os.path.join(base_output_dir, "2-1_ESA_Worldcover")
+        if os.path.exists(esa_wc_folder):
+            try:
+                _shutil_orch.rmtree(esa_wc_folder)
+                main_logger.info("Removed 2-1_ESA_Worldcover after all dates completed")
+            except Exception as _e:
+                main_logger.info(f"WARNING: could not remove ESA WorldCover: {_e}")
+
+        # Final summary
         main_logger.info("")
         main_logger.info("=" * 70)
-        _rw = min(_retry_max_workers, len(_memory_retry_items))
-        main_logger.info(f"AUTO-RETRY: {len(_memory_retry_items)} tile(s) killed by memory limit — retrying with {_rw} worker(s), no memory limit")
+        main_logger.info("FINAL SUMMARY")
         main_logger.info("=" * 70)
-        _memory_limit_gb = None  # closure picks up new value; no limit for retry
-
-        # Clean up partial output before submitting retries.
-        # Also remove the S2L1C folder: a memory kill during download leaves a
-        # partial/corrupted .SAFE file that ACOLITE cannot process. With
-        # os.makedirs(exist_ok=True) that file would be reused and cause
-        # an immediate exit-code-1 failure in the retry subprocess.
-        import shutil as _shutil
-        _retry_start_times = {}
-        for item in _memory_retry_items:
-            for _pfx in ("0_S2L1C_Products",
-                         "1_Atmospheric_Corrected_Products",
-                         "2_Masked_Products"):
-                _partial = os.path.join(base_output_dir, f"{_pfx}_{item}_{sensing_period[0]}")
-                if os.path.exists(_partial):
-                    _shutil.rmtree(_partial, ignore_errors=True)
-                    main_logger.info(f"  Removed partial {_pfx} for {item}")
-
-        with ThreadPoolExecutor(max_workers=_rw) as _retry_ex:
-            _retry_futures = {}
-            for _ri, item in enumerate(_memory_retry_items, 1):
-                _retry_start_times[item] = time.time()
-                _fut = _retry_ex.submit(_run_tile_subprocess, item)
-                _retry_futures[_fut] = (_ri, item)
-                main_logger.info(f"  [{_ri}/{len(_memory_retry_items)}] {item} retry submitted")
-
-            for _fut in as_completed(_retry_futures):
-                _ri, item = _retry_futures[_fut]
-                _retry_elapsed_s = time.time() - _retry_start_times[item]
-                try:
-                    _fut.result()
-                    completed_count += 1
-                    failed_count -= 1
-                    tile_results[item] = {"status": "DONE", "elapsed_s": _retry_elapsed_s, "error": "(retried)"}
-                    finished_tiles[item] = "DONE"
-                    main_logger.info(f"  [{_ri}/{len(_memory_retry_items)}] {item} retry DONE ({_format_elapsed(_retry_elapsed_s)})")
-                except Exception as _re:
-                    _retry_elapsed_s = time.time() - _retry_start_times[item]
-                    tile_results[item]["error"] = f"retry failed: {_re}"
-                    main_logger.info(f"  [{_ri}/{len(_memory_retry_items)}] {item} retry FAILED ({_format_elapsed(_retry_elapsed_s)}): {_re}")
-
-    # Final summary written to 4_logfile.log
-    main_logger.info("")
-    main_logger.info("=" * 70)
-    main_logger.info("FINAL SUMMARY")
-    main_logger.info("=" * 70)
-    main_logger.info(f"Total time: {_format_elapsed(time.time() - POS2IDON_time0)}")
-    main_logger.info(f"Tiles completed: {completed_count}/{total}")
-    main_logger.info(f"Tiles failed:    {failed_count}/{total}")
-    main_logger.info("")
-    main_logger.info(f"  {'#':>3}  {'Tile':6s}  {'Status':6s}  {'Elapsed':10s}  Error")
-    main_logger.info(f"  {'-'*3}  {'-'*6}  {'-'*6}  {'-'*10}  {'-'*30}")
-    for idx, item in enumerate(_all_items, 1):
-        r = tile_results.get(item, {"status": "?", "elapsed_s": 0, "error": None})
-        err = r["error"] or ""
-        main_logger.info(f"  {idx:>3}  {item:6s}  {r['status']:6s}  {_format_elapsed(r['elapsed_s']):10s}  {err}")
-    main_logger.info("=" * 70)
-
-    # Per-tile log handling. We always copy the tail of FAILED tile logs into the
-    # main log so the summary is self-contained. Whether to delete the per-tile
-    # files afterwards depends on keep_only_classification.
-    _keep_only_classification = keep_only_classification if 'keep_only_classification' in vars() else False
-    for item in _all_items:
-        per_tile_log = f"4_logfile_{item}.log"
-        if not os.path.exists(per_tile_log):
-            continue
-        if tile_results.get(item, {}).get("status") == "FAILED":
-            try:
-                with open(per_tile_log) as f:
-                    tail = f.readlines()[-100:]
-                main_logger.info(f"--- Last {len(tail)} lines of {item} log (FAILED) ---")
-                for line in tail:
-                    main_logger.info(line.rstrip())
-                main_logger.info("--- end ---")
-            except Exception:
-                pass
-        if _keep_only_classification:
-            try:
-                os.remove(per_tile_log)
-            except Exception:
-                pass
-
-    # Final cleanup: keep only classification results, delete everything else.
-    if _keep_only_classification:
-        main_logger.info("")
+        main_logger.info(f"Total time:      {_format_elapsed(time.time() - POS2IDON_time0)}")
+        main_logger.info(f"Dates processed: {len(_sensing_dates_list)}")
+        main_logger.info(f"Total completed: {grand_done}/{grand_total}")
+        main_logger.info(f"Total failed:    {grand_failed}/{grand_total}")
         main_logger.info("=" * 70)
-        main_logger.info("FINAL CLEANUP: keeping only classification results")
-        main_logger.info("=" * 70)
+
+    else:
+        # ── ROI / single-zone mode ──────────────────────────────────────────
+        current_item = zone_name
+        main_logger.info(f"ROI mode: processing zone '{current_item}' for {sensing_period}")
         try:
-            entries = sorted(os.listdir(base_output_dir))
+            process_tile(current_item)
+            main_logger.info(f"{current_item} - DONE")
         except Exception as e:
-            entries = []
-            main_logger.info(f"Could not list {base_output_dir}: {e}")
-        for entry in entries:
-            full = os.path.join(base_output_dir, entry)
-            # Keep classification results and the orchestrator log
-            if entry.startswith("3_Classification_Results"):
-                main_logger.info(f"  KEEP   {entry}")
-                continue
-            # Delete S2L1C downloads, AC products, masked products, ESA worldcover
-            if (entry.startswith("0_S2L1C_Products")
-                or entry.startswith("1_Atmospheric_Corrected_Products")
-                or entry.startswith("2_Masked_Products")
-                or entry.startswith("2-1_ESA_Worldcover")):
-                try:
-                    if os.path.isdir(full):
-                        shutil.rmtree(full)
-                    else:
-                        os.remove(full)
-                    main_logger.info(f"  DELETE {entry}")
-                except Exception as e:
-                    main_logger.info(f"  FAILED to delete {entry}: {e}")
-            else:
-                main_logger.info(f"  SKIP   {entry}  (not recognized, leaving as-is)")
-        main_logger.info("=" * 70)
+            main_logger.info(f"{current_item} - FAILED: {e}")
 
 else:
     print("Failed to pré-start script")
