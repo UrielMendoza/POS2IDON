@@ -31,10 +31,10 @@ search_by = "tile"
 # Tiles grouped into sequential batches. Batches run one at a time; tiles within
 # each batch run in parallel. Group light tiles together and heavy tiles together
 # so each batch gets a consistent memory budget per worker.
-# Batch 1 – lightest  (5 tiles, 5 workers  → 251×0.85/5 ≈ 42 GB each)
-# Batch 2 – medium    (5 tiles, 4 workers  → 251×0.85/4 ≈ 53 GB each)
-# Batch 3 – heavy     (4 tiles, 3 workers  → 251×0.85/3 ≈ 71 GB each)
-# Batch 4 – heaviest  (4 tiles, 2 workers  → 251×0.85/2 ≈ 106 GB each)
+# Batch 1 – lightest  (5 tiles, 5 workers  → 251×0.85/5 ≈  42 GB each)
+# Batch 2 – medium    (5 tiles, 4 workers  → 251×0.85/4 ≈  53 GB each)
+# Batch 3 – heavy     (4 tiles, 2 workers  → 251×0.85/2 ≈ 106 GB each)
+# Batch 4 – heaviest  (4 tiles, 1 worker   → 251×0.85/1 ≈ 213 GB each, sequential)
 tile_batches = [
     ["16QDG", "16PEC", "16QED", "16PCC", "16PDC"],
     ["16QEE", "16QDD", "16QEF", "16QEH", "16QCF"],
@@ -44,7 +44,7 @@ tile_batches = [
 
 # Number of parallel workers for each batch (one integer per batch).
 # Fewer workers per batch → more RAM per tile → fewer OOM retries.
-batch_workers = [5, 4, 3, 2]
+batch_workers = [5, 4, 2, 1]
 
 # Flat tile list derived from batches (used internally and for backward compat).
 tiles = [t for batch in tile_batches for t in batch]
@@ -283,7 +283,7 @@ memory_limit_per_worker_gb = None  # handled dynamically per batch via batch_wor
 # Number of parallel workers used in the AUTO-RETRY phase.
 # Retry tiles are heavy (40–90 GB each). Safe max = floor(251 GB / 90 GB) = 2.
 # Other inputs besides positive int will stop the pré-start.
-memory_retry_workers = 2
+memory_retry_workers = 1
 
 # Tiles that require low-memory ACOLITE settings (dsf_aot_estimate='fixed').
 # Use for tiles that exceed server RAM even when running alone.
