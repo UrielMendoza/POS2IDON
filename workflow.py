@@ -845,7 +845,7 @@ if pre_start_flag == 1:
                 _dash_stop = threading.Event()
 
                 def _dash_loop():
-                    while not _dash_stop.wait(30):
+                    while not _dash_stop.wait(60):
                         try:
                             _batch_dashboard()
                         except Exception:
