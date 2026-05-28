@@ -150,6 +150,16 @@ def process_tile(current_item):
         _low_memory_tiles = []
     _use_low_memory_acolite = current_item in _low_memory_tiles
 
+    # Tiles that need split-and-mosaic classification to avoid OOM during RF predict.
+    # When enabled, the masked stack is split into 256x256 patches before classification.
+    try:
+        from configs.User_Inputs import low_memory_classify_tiles as _low_memory_classify_tiles
+    except ImportError:
+        _low_memory_classify_tiles = []
+    if current_item in _low_memory_classify_tiles:
+        classification_options = dict(classification_options)
+        classification_options["split_and_mosaic"] = True
+
     # Determine search mode and resolve folder paths (locals to avoid UnboundLocalError)
     _search_by = search_by if 'search_by' in globals() else "roi"
     if _search_by == "tile":

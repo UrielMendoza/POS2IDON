@@ -230,6 +230,13 @@ memory_retry_workers = 2
 # Other inputs besides list of strings will stop the pré-start.
 low_memory_tiles = []
 
+# Tiles that require split-and-mosaic classification to avoid OOM during RF predict.
+# Use when classifying the full tile at once exceeds available RAM (exit code -9 at CLASSIFY stage).
+# These tiles are split into 256x256 patches, each classified independently, then mosaicked.
+# List of tile ID strings, or empty list [] to disable.
+# Other inputs besides list of strings will stop the pré-start.
+low_memory_classify_tiles = ["16QEJ"]
+
 
 # Delete processed folders and files:
 # Other inputs besides dictionary with correct values will stop the pré-start.

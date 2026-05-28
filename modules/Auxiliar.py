@@ -284,6 +284,17 @@ def input_checker():
         inputs_flag = inputs_flag*0
         log_list.append("'low_memory_tiles' must be a list of tile ID strings.")
 
+    try:
+        from configs.User_Inputs import low_memory_classify_tiles
+    except ImportError:
+        low_memory_classify_tiles = []
+
+    if isinstance(low_memory_classify_tiles, list) and all(isinstance(t, str) for t in low_memory_classify_tiles):
+        inputs_flag = inputs_flag*1
+    else:
+        inputs_flag = inputs_flag*0
+        log_list.append("'low_memory_classify_tiles' must be a list of tile ID strings.")
+
     return inputs_flag, log_list
 
 ############################################################################################
