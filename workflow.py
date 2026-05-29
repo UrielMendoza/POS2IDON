@@ -748,23 +748,23 @@ if pre_start_flag == 1:
             main_logger.info(line)
 
     if _search_by == "tile":
-        # ── Multi-date / tile-batch orchestrator ──────────────────────────────
+        # ── Multi-date orchestrator — pool único de N workers ─────────────────
         _tile_batches = tile_batches if 'tile_batches' in vars() else [tiles if 'tiles' in vars() else []]
-        _batch_workers_cfg = (
-            batch_workers if 'batch_workers' in vars()
-            else [(parallel_max_workers if 'parallel_max_workers' in vars() else 4)] * len(_tile_batches)
-        )
         _sensing_dates_list = sensing_dates if 'sensing_dates' in vars() else [sensing_period[0]]
-        _retry_max_workers = memory_retry_workers if 'memory_retry_workers' in vars() else 2
+        _retry_max_workers = memory_retry_workers if 'memory_retry_workers' in vars() else 1
+        _n_workers = parallel_max_workers if 'parallel_max_workers' in vars() else 2
 
-        n_all_tiles = sum(len(b) for b in _tile_batches)
-        grand_total = len(_sensing_dates_list) * n_all_tiles
+        # Lista plana de tiles en orden (de más ligero a más pesado)
+        all_tiles = [t for b in _tile_batches for t in b]
+        mem_limit = math.floor(_total_ram_gb * 0.85 / _n_workers) if _n_workers > 1 else None
+
+        grand_total = len(_sensing_dates_list) * len(all_tiles)
         grand_done = 0
         grand_failed = 0
 
         main_logger.info(
-            f"Multi-date run: {len(_sensing_dates_list)} dates × {n_all_tiles} tiles"
-            f" = {grand_total} total tile-dates"
+            f"Multi-date run: {len(_sensing_dates_list)} fechas × {len(all_tiles)} tiles"
+            f" = {grand_total} tile-fechas  ({_n_workers} workers, límite {mem_limit} GB c/u)"
         )
 
         for date_idx, current_date in enumerate(_sensing_dates_list, 1):
@@ -777,167 +777,166 @@ if pre_start_flag == 1:
                             grand_done, grand_total, grand_failed)
             main_logger.info(f"  Resultados → {date_dir}/")
 
-            date_done = 0
+            # Tiles ya completos para esta fecha (tienen TIF en date_dir)
+            skipped = [t for t in all_tiles
+                       if glob.glob(os.path.join(date_dir, f"*T{t}*-scmap*.tif"))]
+            pending  = [t for t in all_tiles if t not in skipped]
+
+            if skipped:
+                main_logger.info(f"  {len(skipped)} tile(s) ya completos: {' '.join(skipped)}")
+                grand_done += len(skipped)
+
+            date_done   = len(skipped)
             date_failed = 0
 
-            for batch_idx, batch_tiles in enumerate(_tile_batches):
-                n_workers_cfg = _batch_workers_cfg[batch_idx]
+            if not pending:
+                _print_progress(date_idx, len(_sensing_dates_list), current_date,
+                                grand_done, grand_total, grand_failed,
+                                stage=f"COMPLETA  ✓{date_done}")
+                continue
 
-                # Determine which tiles still need processing for this date
-                pending = [
-                    tile for tile in batch_tiles
-                    if not glob.glob(os.path.join(date_dir, f"*T{tile}*-scmap*.tif"))
-                ]
-                skipped_count = len(batch_tiles) - len(pending)
-                if skipped_count:
-                    skipped_names = [t for t in batch_tiles if t not in pending]
-                    main_logger.info(
-                        f"  Batch {batch_idx+1}: skipping {skipped_count} already-done tile(s):"
-                        f" {' '.join(skipped_names)}"
-                    )
-                    date_done += skipped_count
-                    grand_done += skipped_count
-                if not pending:
-                    continue
+            n_workers      = min(_n_workers, len(pending))
+            eff_mem_limit  = None if len(pending) == 1 else mem_limit
 
-                n_workers = min(n_workers_cfg, len(pending))
-                if len(pending) == 1:
-                    mem_limit = None
-                    main_logger.info(
-                        f"  Batch {batch_idx+1}/{len(_tile_batches)}: 1 tile solo"
-                        f" — memory watchdog disabled"
-                    )
-                else:
-                    mem_limit = math.floor(_total_ram_gb * 0.85 / n_workers)
-                    main_logger.info(
-                        f"  Batch {batch_idx+1}/{len(_tile_batches)}: {len(pending)} tile(s),"
-                        f" {n_workers} worker(s), mem limit {mem_limit} GB each"
-                    )
+            main_logger.info(
+                f"  {len(pending)} tile(s) pendientes, {n_workers} workers,"
+                f" límite {eff_mem_limit} GB c/u"
+            )
 
-                # Clean stale status files from previous runs
-                for tile in pending:
+            # Limpiar status files de corridas anteriores
+            for tile in pending:
+                try:
+                    os.remove(f"4_status_{tile}.txt")
+                except FileNotFoundError:
+                    pass
+
+            item_start_times = {tile: time.time() for tile in pending}
+            tile_status = {}   # tile → string final "DONE ..." / "FAILED ..."
+            tile_results = {}  # tile → {"status":..., "error":...}
+
+            def _dashboard():
+                now = time.time()
+                header = (
+                    f"\n  [{current_date}  {time.strftime('%H:%M:%S')}"
+                    f"  {n_workers} workers  límite {eff_mem_limit} GB]"
+                )
+                rows = []
+                for idx, t in enumerate(all_tiles, 1):
+                    if t in skipped:
+                        rows.append(f"    [{idx:>2}] {t:8s}  DONE (previa)")
+                    elif t in tile_status:
+                        rows.append(f"    [{idx:>2}] {t:8s}  {tile_status[t]}")
+                    else:
+                        stage, ts = _read_stage(t)
+                        age = (_format_elapsed(now - ts) if ts
+                               else _format_elapsed(now - item_start_times.get(t, now)))
+                        rows.append(f"    [{idx:>2}] {t:8s}  {stage:<22s}  {age}")
+                sys.stdout.write(header + "\n" + "\n".join(rows) + "\n")
+                sys.stdout.flush()
+
+            _dash_stop = threading.Event()
+
+            def _dash_loop():
+                _last = {}
+                while not _dash_stop.wait(5):
                     try:
-                        os.remove(f"4_status_{tile}.txt")
-                    except FileNotFoundError:
+                        changed = False
+                        for t in pending:
+                            cur = tile_status.get(t) or _read_stage(t)[0]
+                            if _last.get(t) != cur:
+                                _last[t] = cur
+                                changed = True
+                        if changed:
+                            _dashboard()
+                    except Exception:
                         pass
 
-                item_start_times = {tile: time.time() for tile in pending}
-                batch_results = {}
-                _batch_done = {}  # tile -> display string, filled as futures resolve
+            _dash_thread = threading.Thread(target=_dash_loop, daemon=True)
+            _dash_thread.start()
 
-                def _batch_dashboard():
-                    now = time.time()
-                    header = (
-                        f"\n  [Batch {batch_idx+1}/{len(_tile_batches)}"
-                        f"  fecha {current_date}  {time.strftime('%H:%M:%S')}]"
-                    )
-                    rows = []
-                    for t in pending:
-                        if t in _batch_done:
-                            rows.append(f"    {t:8s}  {_batch_done[t]}")
-                        else:
-                            stage, ts = _read_stage(t)
-                            age = (_format_elapsed(now - ts) if ts
-                                   else _format_elapsed(now - item_start_times.get(t, now)))
-                            rows.append(f"    {t:8s}  {stage:<22s}  {age}")
-                    sys.stdout.write(header + "\n" + "\n".join(rows) + "\n")
-                    sys.stdout.flush()
+            with ThreadPoolExecutor(max_workers=n_workers) as ex:
+                futures = {
+                    ex.submit(_run_tile_subprocess, tile, current_date, eff_mem_limit): tile
+                    for tile in pending
+                }
+                for tile in pending:
+                    main_logger.info(f"  Submitted: {tile}")
 
-                _dash_stop = threading.Event()
-
-                def _dash_loop():
-                    while not _dash_stop.wait(60):
+                for fut in as_completed(futures):
+                    tile = futures[fut]
+                    elapsed_s = time.time() - item_start_times[tile]
+                    try:
+                        fut.result()
+                        tile_results[tile] = {"status": "DONE", "error": None}
+                        date_done  += 1
+                        grand_done += 1
+                        tile_status[tile] = f"DONE ({_format_elapsed(elapsed_s)})"
+                        main_logger.info(f"  {tile} DONE ({_format_elapsed(elapsed_s)})")
                         try:
-                            _batch_dashboard()
-                        except Exception:
-                            pass
+                            _move_and_clean(tile, current_date, date_dir)
+                        except Exception as _ce:
+                            main_logger.info(f"  WARNING: cleanup failed for {tile}: {_ce}")
+                    except Exception as e:
+                        tile_results[tile] = {"status": "FAILED", "error": str(e)}
+                        date_failed  += 1
+                        grand_failed += 1
+                        tile_status[tile] = f"FAILED ({_format_elapsed(elapsed_s)})"
+                        main_logger.info(f"  {tile} FAILED ({_format_elapsed(elapsed_s)}): {e}")
 
-                _dash_thread = threading.Thread(target=_dash_loop, daemon=True)
-                _dash_thread.start()
+            _dash_stop.set()
+            _dash_thread.join(timeout=2)
+            _dashboard()  # snapshot final
 
-                with ThreadPoolExecutor(max_workers=n_workers) as ex:
+            # Auto-retry: tiles que fallaron por memoria, sin límite, 1 a la vez
+            retry_tiles = [
+                t for t, r in tile_results.items()
+                if r["status"] == "FAILED" and _needs_retry(r["error"])
+            ]
+            if retry_tiles:
+                main_logger.info(f"  AUTO-RETRY {len(retry_tiles)} tile(s): {' '.join(retry_tiles)}")
+                for tile in retry_tiles:
+                    for _pfx in ("0_S2L1C_Products", "1_Atmospheric_Corrected_Products",
+                                 "2_Masked_Products"):
+                        _d = os.path.join(base_output_dir, f"{_pfx}_{tile}_{current_date}")
+                        if os.path.exists(_d):
+                            _shutil_orch.rmtree(_d, ignore_errors=True)
+                    date_failed  -= 1
+                    grand_failed -= 1
+
+                rw = min(_retry_max_workers, len(retry_tiles))
+                item_start_times.update({tile: time.time() for tile in retry_tiles})
+                with ThreadPoolExecutor(max_workers=rw) as ex:
                     futures = {
-                        ex.submit(_run_tile_subprocess, tile, current_date, mem_limit): tile
-                        for tile in pending
+                        ex.submit(_run_tile_subprocess, tile, current_date, None): tile
+                        for tile in retry_tiles
                     }
-                    for tile in pending:
-                        main_logger.info(f"    Submitted: {tile}")
-
                     for fut in as_completed(futures):
                         tile = futures[fut]
                         elapsed_s = time.time() - item_start_times[tile]
                         try:
                             fut.result()
-                            batch_results[tile] = {"status": "DONE", "error": None}
-                            date_done += 1
+                            tile_results[tile] = {"status": "DONE", "error": "(retried)"}
+                            date_done  += 1
                             grand_done += 1
-                            _batch_done[tile] = f"DONE ({_format_elapsed(elapsed_s)})"
-                            main_logger.info(f"    {tile} DONE ({_format_elapsed(elapsed_s)})")
+                            tile_status[tile] = f"DONE-retry ({_format_elapsed(elapsed_s)})"
+                            main_logger.info(f"  RETRY {tile} DONE ({_format_elapsed(elapsed_s)})")
                             try:
                                 _move_and_clean(tile, current_date, date_dir)
                             except Exception as _ce:
-                                main_logger.info(f"    WARNING: cleanup failed for {tile}: {_ce}")
+                                main_logger.info(f"  WARNING: cleanup failed for {tile}: {_ce}")
                         except Exception as e:
-                            batch_results[tile] = {"status": "FAILED", "error": str(e)}
-                            date_failed += 1
+                            tile_results[tile]["error"] = f"retry failed: {e}"
+                            date_failed  += 1
                             grand_failed += 1
-                            _batch_done[tile] = f"FAILED ({_format_elapsed(elapsed_s)})"
-                            main_logger.info(f"    {tile} FAILED ({_format_elapsed(elapsed_s)}): {e}")
+                            tile_status[tile] = f"RETRY-FAILED ({_format_elapsed(elapsed_s)})"
+                            main_logger.info(f"  RETRY {tile} FAILED ({_format_elapsed(elapsed_s)}): {e}")
 
-                _dash_stop.set()
-                _dash_thread.join(timeout=2)
-                _batch_dashboard()  # snapshot final al terminar el lote
-
-                # Auto-retry tiles that failed due to memory pressure (no limit in retry)
-                retry_tiles = [
-                    t for t, r in batch_results.items()
-                    if r["status"] == "FAILED" and _needs_retry(r["error"])
-                ]
-                if retry_tiles:
-                    main_logger.info(f"  AUTO-RETRY {len(retry_tiles)} tile(s): {' '.join(retry_tiles)}")
-                    for tile in retry_tiles:
-                        for _pfx in ("0_S2L1C_Products", "1_Atmospheric_Corrected_Products",
-                                     "2_Masked_Products"):
-                            _d = os.path.join(base_output_dir, f"{_pfx}_{tile}_{current_date}")
-                            if os.path.exists(_d):
-                                _shutil_orch.rmtree(_d, ignore_errors=True)
-                        date_failed -= 1
-                        grand_failed -= 1
-
-                    rw = min(_retry_max_workers, len(retry_tiles))
-                    item_start_times.update({tile: time.time() for tile in retry_tiles})
-                    with ThreadPoolExecutor(max_workers=rw) as ex:
-                        futures = {
-                            ex.submit(_run_tile_subprocess, tile, current_date, None): tile
-                            for tile in retry_tiles
-                        }
-                        for fut in as_completed(futures):
-                            tile = futures[fut]
-                            elapsed_s = time.time() - item_start_times[tile]
-                            try:
-                                fut.result()
-                                batch_results[tile] = {"status": "DONE", "error": "(retried)"}
-                                date_done += 1
-                                grand_done += 1
-                                main_logger.info(f"    RETRY {tile} DONE ({_format_elapsed(elapsed_s)})")
-                                try:
-                                    _move_and_clean(tile, current_date, date_dir)
-                                except Exception as _ce:
-                                    main_logger.info(f"    WARNING: cleanup failed for {tile}: {_ce}")
-                            except Exception as e:
-                                batch_results[tile]["error"] = f"retry failed: {e}"
-                                date_failed += 1
-                                grand_failed += 1
-                                main_logger.info(
-                                    f"    RETRY {tile} FAILED ({_format_elapsed(elapsed_s)}): {e}"
-                                )
-
-                # Clean status files after batch
-                for tile in pending:
-                    try:
-                        os.remove(f"4_status_{tile}.txt")
-                    except FileNotFoundError:
-                        pass
+            # Limpiar status files
+            for tile in pending:
+                try:
+                    os.remove(f"4_status_{tile}.txt")
+                except FileNotFoundError:
+                    pass
 
             _print_progress(date_idx, len(_sensing_dates_list), current_date,
                             grand_done, grand_total, grand_failed,
