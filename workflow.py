@@ -620,7 +620,6 @@ if _single_tile_mode is not None:
         sys.exit(2)
 
 if pre_start_flag == 1:
-    import math
     import threading
     import shutil as _shutil_orch
 
@@ -630,14 +629,6 @@ if pre_start_flag == 1:
         return f"{h:d}h{m:02d}m{s:02d}s" if h else f"{m:d}m{s:02d}s"
 
     _search_by = search_by if 'search_by' in vars() else "roi"
-
-    # Get total RAM once for per-batch memory limit calculation
-    _total_ram_gb = 251.0  # safe fallback for tsom01
-    try:
-        import psutil as _psutil_orch
-        _total_ram_gb = _psutil_orch.virtual_memory().total / (1024 ** 3)
-    except Exception:
-        pass
 
     def _run_tile_subprocess(item, date_str, memory_limit_gb):
         """Launch a fully isolated Python subprocess to process one tile for one date."""
@@ -756,7 +747,9 @@ if pre_start_flag == 1:
 
         # Lista plana de tiles en orden (de más ligero a más pesado)
         all_tiles = [t for b in _tile_batches for t in b]
-        mem_limit = math.floor(_total_ram_gb * 0.85 / _n_workers) if _n_workers > 1 else None
+        # None → watchdog deshabilitado; pon un valor en GB en User_Inputs para activarlo
+        _mem_limit_cfg = memory_limit_per_worker_gb if 'memory_limit_per_worker_gb' in vars() else None
+        mem_limit = _mem_limit_cfg
 
         grand_total = len(_sensing_dates_list) * len(all_tiles)
         grand_done = 0
