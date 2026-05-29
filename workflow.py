@@ -742,7 +742,6 @@ if pre_start_flag == 1:
         # ── Multi-date orchestrator — pool único de N workers ─────────────────
         _tile_batches = tile_batches if 'tile_batches' in vars() else [tiles if 'tiles' in vars() else []]
         _sensing_dates_list = sensing_dates if 'sensing_dates' in vars() else [sensing_period[0]]
-        _retry_max_workers = memory_retry_workers if 'memory_retry_workers' in vars() else 1
         _n_workers = parallel_max_workers if 'parallel_max_workers' in vars() else 2
 
         # Lista plana de tiles en orden (de más ligero a más pesado)
@@ -880,49 +879,81 @@ if pre_start_flag == 1:
             _dash_thread.join(timeout=2)
             _dashboard()  # snapshot final
 
-            # Auto-retry: tiles que fallaron por memoria, sin límite, 1 a la vez
-            retry_tiles = [
+            # Auto-retry: OOM tiles reintentados secuencialmente, hasta _oom_max intentos
+            _retry_tiles = [
                 t for t, r in tile_results.items()
                 if r["status"] == "FAILED" and _needs_retry(r["error"])
             ]
-            if retry_tiles:
-                main_logger.info(f"  AUTO-RETRY {len(retry_tiles)} tile(s): {' '.join(retry_tiles)}")
-                for tile in retry_tiles:
+            if _retry_tiles:
+                main_logger.info(f"  RETRY {len(_retry_tiles)} tile(s) por OOM: {' '.join(_retry_tiles)}")
+                _oom_max = 10
+
+                for tile in _retry_tiles:
+                    date_failed  -= 1
+                    grand_failed -= 1
                     for _pfx in ("0_S2L1C_Products", "1_Atmospheric_Corrected_Products",
                                  "2_Masked_Products"):
                         _d = os.path.join(base_output_dir, f"{_pfx}_{tile}_{current_date}")
                         if os.path.exists(_d):
                             _shutil_orch.rmtree(_d, ignore_errors=True)
-                    date_failed  -= 1
-                    grand_failed -= 1
 
-                rw = min(_retry_max_workers, len(retry_tiles))
-                item_start_times.update({tile: time.time() for tile in retry_tiles})
-                with ThreadPoolExecutor(max_workers=rw) as ex:
-                    futures = {
-                        ex.submit(_run_tile_subprocess, tile, current_date, None): tile
-                        for tile in retry_tiles
-                    }
-                    for fut in as_completed(futures):
-                        tile = futures[fut]
-                        elapsed_s = time.time() - item_start_times[tile]
+                    for _attempt in range(1, _oom_max + 1):
+                        if _attempt > 1:
+                            main_logger.info(
+                                f"  {tile} OOM intento {_attempt}/{_oom_max} — esperando 60s..."
+                            )
+                            time.sleep(60)
+                            for _pfx in ("0_S2L1C_Products", "1_Atmospheric_Corrected_Products",
+                                         "2_Masked_Products"):
+                                _d = os.path.join(base_output_dir, f"{_pfx}_{tile}_{current_date}")
+                                if os.path.exists(_d):
+                                    _shutil_orch.rmtree(_d, ignore_errors=True)
+                        else:
+                            main_logger.info(
+                                f"  RETRY {tile} intento 1/{_oom_max} (sin límite de memoria)"
+                            )
+
+                        _t0 = time.time()
                         try:
-                            fut.result()
-                            tile_results[tile] = {"status": "DONE", "error": "(retried)"}
+                            _run_tile_subprocess(tile, current_date, None)
+                            _es = time.time() - _t0
+                            tile_results[tile] = {"status": "DONE", "error": f"(retry {_attempt})"}
                             date_done  += 1
                             grand_done += 1
-                            tile_status[tile] = f"DONE-retry ({_format_elapsed(elapsed_s)})"
-                            main_logger.info(f"  RETRY {tile} DONE ({_format_elapsed(elapsed_s)})")
+                            tile_status[tile] = f"DONE-retry{_attempt} ({_format_elapsed(_es)})"
+                            main_logger.info(
+                                f"  {tile} DONE en intento {_attempt} ({_format_elapsed(_es)})"
+                            )
                             try:
                                 _move_and_clean(tile, current_date, date_dir)
                             except Exception as _ce:
                                 main_logger.info(f"  WARNING: cleanup failed for {tile}: {_ce}")
-                        except Exception as e:
-                            tile_results[tile]["error"] = f"retry failed: {e}"
-                            date_failed  += 1
-                            grand_failed += 1
-                            tile_status[tile] = f"RETRY-FAILED ({_format_elapsed(elapsed_s)})"
-                            main_logger.info(f"  RETRY {tile} FAILED ({_format_elapsed(elapsed_s)}): {e}")
+                            break
+                        except RuntimeError as _re:
+                            _es = time.time() - _t0
+                            if _needs_retry(str(_re)):
+                                tile_status[tile] = f"OOM intento {_attempt} ({_format_elapsed(_es)})"
+                                main_logger.info(
+                                    f"  {tile} OOM en intento {_attempt} ({_format_elapsed(_es)})"
+                                )
+                                if _attempt == _oom_max:
+                                    tile_results[tile]["error"] = f"OOM tras {_oom_max} intentos"
+                                    date_failed  += 1
+                                    grand_failed += 1
+                                    main_logger.info(
+                                        f"  {tile} RENDIDO tras {_oom_max} intentos OOM"
+                                    )
+                            else:
+                                tile_results[tile]["error"] = (
+                                    f"error no-OOM en retry {_attempt}: {_re}"
+                                )
+                                date_failed  += 1
+                                grand_failed += 1
+                                tile_status[tile] = f"FAILED-nonOOM ({_format_elapsed(_es)})"
+                                main_logger.info(
+                                    f"  {tile} error no-OOM en retry {_attempt}: {_re}"
+                                )
+                                break
 
             # Limpiar status files
             for tile in pending:
