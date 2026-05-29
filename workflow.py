@@ -770,11 +770,12 @@ if pre_start_flag == 1:
         for date_idx, current_date in enumerate(_sensing_dates_list, 1):
             year = current_date[:4]
             year_dir = os.path.join(base_output_dir, year)
-            os.makedirs(year_dir, exist_ok=True)
+            date_dir = os.path.join(year_dir, current_date)
+            os.makedirs(date_dir, exist_ok=True)
 
             _print_progress(date_idx, len(_sensing_dates_list), current_date,
                             grand_done, grand_total, grand_failed)
-            main_logger.info(f"  Resultados → {year_dir}/")
+            main_logger.info(f"  Resultados → {date_dir}/")
 
             date_done = 0
             date_failed = 0
@@ -785,7 +786,7 @@ if pre_start_flag == 1:
                 # Determine which tiles still need processing for this date
                 pending = [
                     tile for tile in batch_tiles
-                    if not glob.glob(os.path.join(year_dir, f"*T{tile}*-scmap*.tif"))
+                    if not glob.glob(os.path.join(date_dir, f"*T{tile}*-scmap*.tif"))
                 ]
                 skipped_count = len(batch_tiles) - len(pending)
                 if skipped_count:
@@ -873,7 +874,7 @@ if pre_start_flag == 1:
                             _batch_done[tile] = f"DONE ({_format_elapsed(elapsed_s)})"
                             main_logger.info(f"    {tile} DONE ({_format_elapsed(elapsed_s)})")
                             try:
-                                _move_and_clean(tile, current_date, year_dir)
+                                _move_and_clean(tile, current_date, date_dir)
                             except Exception as _ce:
                                 main_logger.info(f"    WARNING: cleanup failed for {tile}: {_ce}")
                         except Exception as e:
@@ -920,7 +921,7 @@ if pre_start_flag == 1:
                                 grand_done += 1
                                 main_logger.info(f"    RETRY {tile} DONE ({_format_elapsed(elapsed_s)})")
                                 try:
-                                    _move_and_clean(tile, current_date, year_dir)
+                                    _move_and_clean(tile, current_date, date_dir)
                                 except Exception as _ce:
                                     main_logger.info(f"    WARNING: cleanup failed for {tile}: {_ce}")
                             except Exception as e:
