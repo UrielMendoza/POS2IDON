@@ -621,6 +621,7 @@ if _single_tile_mode is not None:
 
 if pre_start_flag == 1:
     import threading
+    import signal as _signal
     import shutil as _shutil_orch
 
     def _format_elapsed(seconds):
@@ -630,10 +631,32 @@ if pre_start_flag == 1:
 
     _search_by = search_by if 'search_by' in vars() else "roi"
 
+    # Registry of all live subprocesses — used to kill them on orchestrator exit
+    _live_procs: dict = {}  # pid -> Popen
+    _live_procs_lock = threading.Lock()
+
+    def _kill_all_subprocs(signum=None, frame=None):
+        with _live_procs_lock:
+            pids = list(_live_procs.keys())
+        for pid in pids:
+            try:
+                _live_procs[pid].kill()
+            except Exception:
+                pass
+        if signum is not None:
+            raise SystemExit(1)
+
+    _signal.signal(_signal.SIGTERM, _kill_all_subprocs)
+    _signal.signal(_signal.SIGINT,  _kill_all_subprocs)
+    import atexit as _atexit
+    _atexit.register(_kill_all_subprocs)
+
     def _run_tile_subprocess(item, date_str, memory_limit_gb):
         """Launch a fully isolated Python subprocess to process one tile for one date."""
         cmd = [sys.executable, sys.argv[0], "--tile", item, "--date", date_str]
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        with _live_procs_lock:
+            _live_procs[proc.pid] = proc
 
         _kill_event = threading.Event()
         _kill_reason = [None]
@@ -664,6 +687,9 @@ if pre_start_flag == 1:
         stdout_str, stderr_str = proc.communicate()
         _kill_event.set()
         watchdog.join(timeout=2)
+
+        with _live_procs_lock:
+            _live_procs.pop(proc.pid, None)
 
         if _kill_reason[0] or proc.returncode != 0:
             try:
