@@ -754,6 +754,35 @@ if pre_start_flag == 1:
         grand_done = 0
         grand_failed = 0
 
+        _min_free_ram = (
+            min_free_ram_gb_for_retry
+            if 'min_free_ram_gb_for_retry' in vars() else None
+        )
+
+        def _wait_for_ram(label):
+            if _min_free_ram is None:
+                return
+            try:
+                import psutil as _psu
+                for _wi in range(120):  # max 2h (120 × 60s)
+                    _avail = _psu.virtual_memory().available / (1024 ** 3)
+                    if _avail >= _min_free_ram:
+                        main_logger.info(
+                            f"  RAM OK: {_avail:.0f} GB libres — iniciando {label}"
+                        )
+                        return
+                    main_logger.info(
+                        f"  {label} esperando RAM: {_avail:.0f}/{_min_free_ram:.0f} GB"
+                        f" (ciclo {_wi+1}/120)"
+                    )
+                    time.sleep(60)
+                _avail = _psu.virtual_memory().available / (1024 ** 3)
+                main_logger.info(
+                    f"  {label}: timeout RAM, procediendo con {_avail:.0f} GB libres"
+                )
+            except Exception:
+                pass
+
         main_logger.info(
             f"Multi-date run: {len(_sensing_dates_list)} fechas × {len(all_tiles)} tiles"
             f" = {grand_total} tile-fechas  ({_n_workers} workers, límite {mem_limit} GB c/u)"
@@ -887,34 +916,6 @@ if pre_start_flag == 1:
             if _retry_tiles:
                 main_logger.info(f"  RETRY {len(_retry_tiles)} tile(s) por OOM: {' '.join(_retry_tiles)}")
                 _oom_max = 10
-                _min_free_ram = (
-                    min_free_ram_gb_for_retry
-                    if 'min_free_ram_gb_for_retry' in vars() else None
-                )
-
-                def _wait_for_ram(label):
-                    if _min_free_ram is None:
-                        return
-                    try:
-                        import psutil as _psu
-                        for _wi in range(120):  # max 2h (120 × 60s)
-                            _avail = _psu.virtual_memory().available / (1024 ** 3)
-                            if _avail >= _min_free_ram:
-                                main_logger.info(
-                                    f"  RAM OK: {_avail:.0f} GB libres — iniciando {label}"
-                                )
-                                return
-                            main_logger.info(
-                                f"  {label} esperando RAM: {_avail:.0f}/{_min_free_ram:.0f} GB"
-                                f" (ciclo {_wi+1}/120)"
-                            )
-                            time.sleep(60)
-                        _avail = _psu.virtual_memory().available / (1024 ** 3)
-                        main_logger.info(
-                            f"  {label}: timeout RAM, procediendo con {_avail:.0f} GB libres"
-                        )
-                    except Exception:
-                        pass
 
                 for tile in _retry_tiles:
                     date_failed  -= 1
@@ -995,6 +996,86 @@ if pre_start_flag == 1:
                             grand_done, grand_total, grand_failed,
                             stage=f"COMPLETA  ✓{date_done}"
                                   + (f"  ✗{date_failed}" if date_failed else ""))
+
+        # ── Post-loop cleanup: retry any tile-dates that have no output TIF ────
+        # Runs after ALL dates complete. Finds missing tile-dates (no scmap TIF)
+        # and retries them sequentially with long delays between passes.
+        # This ensures the pipeline eventually completes everything without
+        # blocking the per-date loop indefinitely.
+        _post_max_passes = 5
+        _post_delay_s    = 1800  # 30 min between global retry passes
+
+        for _post_pass in range(1, _post_max_passes + 1):
+            _missing = []
+            for _chk_date in _sensing_dates_list:
+                _chk_year_dir = os.path.join(base_output_dir, _chk_date[:4])
+                _chk_date_dir = os.path.join(_chk_year_dir, _chk_date)
+                for _chk_tile in all_tiles:
+                    if not glob.glob(
+                        os.path.join(_chk_date_dir, f"*T{_chk_tile}*-scmap*.tif")
+                    ):
+                        _missing.append((_chk_tile, _chk_date))
+
+            if not _missing:
+                main_logger.info("Post-retry: todas las tile-fechas completadas.")
+                break
+
+            main_logger.info(
+                f"Post-retry pass {_post_pass}/{_post_max_passes}: "
+                f"{len(_missing)} tile-fecha(s) pendiente(s) — "
+                f"esperando {_post_delay_s//60} min antes de reintentar..."
+            )
+            time.sleep(_post_delay_s)
+
+            for _pt, _pd in _missing:
+                _py = _pd[:4]
+                _pyd = os.path.join(base_output_dir, _py)
+                _pdd = os.path.join(_pyd, _pd)
+                os.makedirs(_pdd, exist_ok=True)
+
+                # clean any partial intermediate folders before retrying
+                for _pfx in ("0_S2L1C_Products", "1_Atmospheric_Corrected_Products",
+                             "2_Masked_Products"):
+                    _d = os.path.join(base_output_dir, f"{_pfx}_{_pt}_{_pd}")
+                    if os.path.exists(_d):
+                        _shutil_orch.rmtree(_d, ignore_errors=True)
+
+                _wait_for_ram(f"{_pt}/{_pd}")
+                main_logger.info(
+                    f"  Post-retry {_pt} {_pd} (pass {_post_pass})"
+                )
+                _t0 = time.time()
+                try:
+                    _run_tile_subprocess(_pt, _pd, None)
+                    _es = time.time() - _t0
+                    grand_done += 1
+                    main_logger.info(
+                        f"  Post-retry {_pt} {_pd} DONE ({_format_elapsed(_es)})"
+                    )
+                    try:
+                        _move_and_clean(_pt, _pd, _pdd)
+                    except Exception as _ce:
+                        main_logger.info(f"  WARNING: cleanup failed {_pt}/{_pd}: {_ce}")
+                except Exception as _re:
+                    _es = time.time() - _t0
+                    main_logger.info(
+                        f"  Post-retry {_pt} {_pd} FAILED ({_format_elapsed(_es)}): {_re}"
+                    )
+                    time.sleep(300)  # 5 min before next tile after a failure
+
+        else:
+            _still_missing = sum(
+                1 for _chk_date in _sensing_dates_list
+                for _chk_tile in all_tiles
+                if not glob.glob(os.path.join(
+                    base_output_dir, _chk_date[:4], _chk_date,
+                    f"*T{_chk_tile}*-scmap*.tif"
+                ))
+            )
+            main_logger.info(
+                f"Post-retry: {_post_max_passes} passes completados, "
+                f"{_still_missing} tile-fecha(s) todavía pendiente(s)."
+            )
 
         # Clean shared ESA WorldCover folder after all dates are done
         esa_wc_folder = os.path.join(base_output_dir, "2-1_ESA_Worldcover")
