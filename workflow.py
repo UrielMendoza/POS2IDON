@@ -887,6 +887,34 @@ if pre_start_flag == 1:
             if _retry_tiles:
                 main_logger.info(f"  RETRY {len(_retry_tiles)} tile(s) por OOM: {' '.join(_retry_tiles)}")
                 _oom_max = 10
+                _min_free_ram = (
+                    min_free_ram_gb_for_retry
+                    if 'min_free_ram_gb_for_retry' in vars() else None
+                )
+
+                def _wait_for_ram(label):
+                    if _min_free_ram is None:
+                        return
+                    try:
+                        import psutil as _psu
+                        for _wi in range(120):  # max 2h (120 × 60s)
+                            _avail = _psu.virtual_memory().available / (1024 ** 3)
+                            if _avail >= _min_free_ram:
+                                main_logger.info(
+                                    f"  RAM OK: {_avail:.0f} GB libres — iniciando {label}"
+                                )
+                                return
+                            main_logger.info(
+                                f"  {label} esperando RAM: {_avail:.0f}/{_min_free_ram:.0f} GB"
+                                f" (ciclo {_wi+1}/120)"
+                            )
+                            time.sleep(60)
+                        _avail = _psu.virtual_memory().available / (1024 ** 3)
+                        main_logger.info(
+                            f"  {label}: timeout RAM, procediendo con {_avail:.0f} GB libres"
+                        )
+                    except Exception:
+                        pass
 
                 for tile in _retry_tiles:
                     date_failed  -= 1
@@ -900,18 +928,19 @@ if pre_start_flag == 1:
                     for _attempt in range(1, _oom_max + 1):
                         if _attempt > 1:
                             main_logger.info(
-                                f"  {tile} OOM intento {_attempt}/{_oom_max} — esperando 60s..."
+                                f"  {tile} OOM intento {_attempt}/{_oom_max} — esperando 5 min..."
                             )
-                            time.sleep(60)
+                            time.sleep(300)
                             for _pfx in ("0_S2L1C_Products", "1_Atmospheric_Corrected_Products",
                                          "2_Masked_Products"):
                                 _d = os.path.join(base_output_dir, f"{_pfx}_{tile}_{current_date}")
                                 if os.path.exists(_d):
                                     _shutil_orch.rmtree(_d, ignore_errors=True)
-                        else:
-                            main_logger.info(
-                                f"  RETRY {tile} intento 1/{_oom_max} (sin límite de memoria)"
-                            )
+
+                        _wait_for_ram(tile)
+                        main_logger.info(
+                            f"  RETRY {tile} intento {_attempt}/{_oom_max}"
+                        )
 
                         _t0 = time.time()
                         try:

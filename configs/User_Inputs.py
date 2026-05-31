@@ -285,12 +285,21 @@ memory_limit_per_worker_gb = None  # handled dynamically per batch via batch_wor
 # Other inputs besides positive int will stop the pré-start.
 memory_retry_workers = 1
 
+# Minimum free RAM (GB) required before starting each OOM retry attempt.
+# The retry loop polls psutil.virtual_memory().available every 60 s and waits
+# until this threshold is met (max 2 h, then proceeds anyway).
+# Set to None to disable the gate (retry immediately regardless of free RAM).
+min_free_ram_gb_for_retry = 150
+
 # Tiles that require low-memory ACOLITE settings (dsf_aot_estimate='fixed').
 # Use for tiles that exceed server RAM even when running alone.
 # 'fixed' uses a constant AOT=0.1 — slightly less accurate but fits in RAM.
 # List of tile ID strings, or empty list [] to disable.
 # Other inputs besides list of strings will stop the pré-start.
-low_memory_tiles = []
+low_memory_tiles = [
+    "16QDD", "16QDG", "16QEE", "16QEF",
+    "16QEH", "16QDF", "16QEG", "16QDE",
+]
 
 # Tiles that require split-and-mosaic classification to avoid OOM during RF predict.
 # Use when classifying the full tile at once exceeds available RAM (exit code -9 at CLASSIFY stage).
