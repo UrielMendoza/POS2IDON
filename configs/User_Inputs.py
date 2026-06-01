@@ -267,7 +267,7 @@ parallel_processing = True
 # None - Use os.cpu_count().
 # Integer - Use exactly that many workers.
 # Other inputs besides None or positive int will stop the pré-start.
-parallel_max_workers = 2
+parallel_max_workers = 4
 
 # Memory limit per worker process in GB.
 # Tiles exceeding this limit are killed and auto-retried with memory_retry_workers.
@@ -308,12 +308,7 @@ low_memory_classify_tiles = ["16QEJ"]
 # Tile+date combinations to skip permanently (tile needs more RAM than server can provide).
 # Format: {"YYYYMMDD": ["TILE1", "TILE2", ...], ...}
 # Skipped tile-dates are logged as SKIP and never retried. Remove entries to force retry.
-skip_tile_dates = {
-    "20160527": [
-        "16QDG", "16QEE", "16QDD", "16QEF",
-        "16QEH", "16QDF", "16QEG", "16QDE",
-    ],
-}
+skip_tile_dates = {}
 
 
 # Delete processed folders and files:
