@@ -295,6 +295,20 @@ def input_checker():
         inputs_flag = inputs_flag*0
         log_list.append("'low_memory_classify_tiles' must be a list of tile ID strings.")
 
+    try:
+        from configs.User_Inputs import skip_tile_dates
+    except ImportError:
+        skip_tile_dates = {}
+
+    if isinstance(skip_tile_dates, dict) and all(
+        isinstance(k, str) and isinstance(v, list) and all(isinstance(t, str) for t in v)
+        for k, v in skip_tile_dates.items()
+    ):
+        inputs_flag = inputs_flag*1
+    else:
+        inputs_flag = inputs_flag*0
+        log_list.append("'skip_tile_dates' must be a dict mapping 'YYYYMMDD' to list of tile strings.")
+
     return inputs_flag, log_list
 
 ############################################################################################

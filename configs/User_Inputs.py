@@ -305,6 +305,16 @@ low_memory_tiles = []
 # Other inputs besides list of strings will stop the pré-start.
 low_memory_classify_tiles = ["16QEJ"]
 
+# Tile+date combinations to skip permanently (tile needs more RAM than server can provide).
+# Format: {"YYYYMMDD": ["TILE1", "TILE2", ...], ...}
+# Skipped tile-dates are logged as SKIP and never retried. Remove entries to force retry.
+skip_tile_dates = {
+    "20160527": [
+        "16QDG", "16QEE", "16QDD", "16QEF",
+        "16QEH", "16QDF", "16QEG", "16QDE",
+    ],
+}
+
 
 # Delete processed folders and files:
 # Other inputs besides dictionary with correct values will stop the pré-start.

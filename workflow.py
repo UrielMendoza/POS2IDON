@@ -824,10 +824,22 @@ if pre_start_flag == 1:
                             grand_done, grand_total, grand_failed)
             main_logger.info(f"  Resultados → {date_dir}/")
 
+            # Tiles explícitamente excluidos para esta fecha (RAM insuficiente)
+            _skip_cfg = skip_tile_dates if 'skip_tile_dates' in vars() else {}
+            _date_skips = set(_skip_cfg.get(current_date, []))
+            if _date_skips:
+                main_logger.info(
+                    f"  SKIP permanente {len(_date_skips)} tile(s) para {current_date}: "
+                    f"{' '.join(sorted(_date_skips))}"
+                )
+                grand_total -= len(_date_skips)  # exclude from totals
+
             # Tiles ya completos para esta fecha (tienen TIF en date_dir)
             skipped = [t for t in all_tiles
-                       if glob.glob(os.path.join(date_dir, f"*T{t}*-scmap*.tif"))]
-            pending  = [t for t in all_tiles if t not in skipped]
+                       if t not in _date_skips
+                       and glob.glob(os.path.join(date_dir, f"*T{t}*-scmap*.tif"))]
+            pending  = [t for t in all_tiles
+                        if t not in _date_skips and t not in skipped]
 
             if skipped:
                 main_logger.info(f"  {len(skipped)} tile(s) ya completos: {' '.join(skipped)}")
@@ -941,7 +953,7 @@ if pre_start_flag == 1:
             ]
             if _retry_tiles:
                 main_logger.info(f"  RETRY {len(_retry_tiles)} tile(s) por OOM: {' '.join(_retry_tiles)}")
-                _oom_max = 10
+                _oom_max = 3
 
                 for tile in _retry_tiles:
                     date_failed  -= 1
