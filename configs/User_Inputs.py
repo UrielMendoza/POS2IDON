@@ -267,7 +267,7 @@ parallel_processing = True
 # None - Use os.cpu_count().
 # Integer - Use exactly that many workers.
 # Other inputs besides None or positive int will stop the pré-start.
-parallel_max_workers = 4
+parallel_max_workers = 3
 
 # Memory limit per worker process in GB.
 # Tiles exceeding this limit are killed and auto-retried with memory_retry_workers.
@@ -296,10 +296,7 @@ min_free_ram_gb_for_retry = 150
 # 'fixed' uses a constant AOT=0.1 — slightly less accurate but fits in RAM.
 # List of tile ID strings, or empty list [] to disable.
 # Other inputs besides list of strings will stop the pré-start.
-low_memory_tiles = [
-    "16QDG", "16QEE", "16QDD", "16QEF",
-    "16QEH", "16QDF", "16QEG", "16QDE",
-]
+low_memory_tiles = []
 
 # Tiles that require split-and-mosaic classification to avoid OOM during RF predict.
 # Use when classifying the full tile at once exceeds available RAM (exit code -9 at CLASSIFY stage).

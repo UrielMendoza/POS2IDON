@@ -722,16 +722,9 @@ if pre_start_flag == 1:
                 _shutil_orch.rmtree(_d, ignore_errors=True)
 
     def _needs_retry(err):
-        if not err:
-            return False
-        # OOM kill by Linux kernel
-        if "memory" in err.lower() or "exit code -9" in err:
-            return True
-        # ACOLITE produced no GeoTIFF output (geometry NaN / glint correction failure)
-        # — transient; retry may succeed with different server load or after cleanup
-        if "no classification tif" in err.lower():
-            return True
-        return False
+        # Retry on any subprocess failure — OOM, ACOLITE errors, or transient issues.
+        # The caller limits total attempts via _oom_max so this never loops forever.
+        return bool(err)
 
     def _read_stage(item):
         """Read the current stage written by the subprocess to its status file."""
