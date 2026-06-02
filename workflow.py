@@ -743,22 +743,18 @@ if pre_start_flag == 1:
 
     def _print_progress(date_idx, n_dates, current_date, grand_done, grand_total,
                         grand_failed, stage="EN PROCESO"):
-        """Print an ASCII progress bar showing date and tile-date advancement."""
-        dates_done = date_idx - 1  # fully completed dates before the current one
-        pct_dates = dates_done / n_dates * 100 if n_dates else 0
-        pct_tiles = grand_done / grand_total * 100 if grand_total else 0
+        """Print an ASCII progress bar showing tile-date advancement."""
+        pct = grand_done / grand_total * 100 if grand_total else 0
         bar_w = 34
-        d_filled = int(bar_w * dates_done / n_dates) if n_dates else 0
-        t_filled = int(bar_w * grand_done / grand_total) if grand_total else 0
-        d_bar = "█" * d_filled + "░" * (bar_w - d_filled)
-        t_bar = "█" * t_filled + "░" * (bar_w - t_filled)
+        filled = int(bar_w * grand_done / grand_total) if grand_total else 0
+        bar = "█" * filled + "░" * (bar_w - filled)
+        failed_str = f"  ✗{grand_failed}" if grand_failed else ""
         sep = "─" * 70
         lines = [
             sep,
             f"  Fecha actual : {current_date}  [{date_idx}/{n_dates}]  — {stage}",
-            f"  Fechas       : [{d_bar}] {pct_dates:5.1f}%  ({dates_done}/{n_dates} completas)",
-            f"  Tile-fechas  : [{t_bar}] {pct_tiles:5.1f}%  ({grand_done}/{grand_total}"
-            + (f", {grand_failed} fallidos" if grand_failed else "") + ")",
+            f"  Progreso     : [{bar}] {pct:5.1f}%"
+            f"  ({grand_done}/{grand_total} tile-fechas{failed_str})",
             sep,
         ]
         sys.stdout.write("\n" + "\n".join(lines) + "\n\n")
