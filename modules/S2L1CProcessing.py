@@ -302,11 +302,16 @@ def ACacolite(FilesToAC, OutputFolder, EDuser, EDpass, ROI, low_memory=False):
     if low_memory:
         settings['dsf_aot_estimate'] = 'fixed'
         settings['dsf_fixed_aot'] = 0.1
+        # Disable residual glint correction in low-memory mode: old Sentinel-2 data
+        # (pre-2017) may have missing view geometry for some detectors, producing NaN
+        # geometry arrays. The default glint correction method fails on NaN geometry
+        # and causes ACOLITE to produce no GeoTIFF output at all.
+        settings['dsf_residual_glint_correction'] = False
     else:
         settings['dsf_aot_estimate'] = 'tiled'
-    # Residual Glint correction  (False is default) (if True: Default or Alternative (only possible with "fixed" option) methods)
-    settings['dsf_residual_glint_correction'] = True
-    settings['dsf_residual_glint_correction_method'] = 'default'
+        # Residual Glint correction (False is default)
+        settings['dsf_residual_glint_correction'] = True
+        settings['dsf_residual_glint_correction_method'] = 'default'
     # Calculate TOA (rhot) and Rayleigh-corrected (rhorc) reflectances.
     # rhorc_* -> B01..B12 used for classification and spectral indices (required).
     # rhot_*  -> rhot_B* used by s2cloudless cloud masking (required when cloud_mask=True).
