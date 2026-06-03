@@ -722,9 +722,7 @@ if pre_start_flag == 1:
                 _shutil_orch.rmtree(_d, ignore_errors=True)
 
     def _needs_retry(err):
-        # Retry on any subprocess failure — OOM, ACOLITE errors, or transient issues.
-        # The caller limits total attempts via _oom_max so this never loops forever.
-        return bool(err)
+        return False  # no retries — move on immediately after any failure
 
     def _read_stage(item):
         """Read the current stage written by the subprocess to its status file."""
@@ -939,6 +937,14 @@ if pre_start_flag == 1:
                         grand_failed += 1
                         tile_status[tile] = f"FAILED ({_format_elapsed(elapsed_s)})"
                         main_logger.info(f"  {tile} FAILED ({_format_elapsed(elapsed_s)}): {e}")
+                        # Free disk space and allow OS to reclaim buffer cache
+                        for _pfx in ("0_S2L1C_Products",
+                                     "1_Atmospheric_Corrected_Products",
+                                     "2_Masked_Products",
+                                     "3_Classification_Results"):
+                            _d = os.path.join(base_output_dir, f"{_pfx}_{tile}_{current_date}")
+                            if os.path.exists(_d):
+                                _shutil_orch.rmtree(_d, ignore_errors=True)
 
             _dash_stop.set()
             _dash_thread.join(timeout=2)
@@ -1033,85 +1039,22 @@ if pre_start_flag == 1:
                             stage=f"COMPLETA  ✓{date_done}"
                                   + (f"  ✗{date_failed}" if date_failed else ""))
 
-        # ── Post-loop cleanup: retry any tile-dates that have no output TIF ────
-        # Runs after ALL dates complete. Finds missing tile-dates (no scmap TIF)
-        # and retries them sequentially with long delays between passes.
-        # This ensures the pipeline eventually completes everything without
-        # blocking the per-date loop indefinitely.
-        _post_max_passes = 5
-        _post_delay_s    = 1800  # 30 min between global retry passes
-
-        for _post_pass in range(1, _post_max_passes + 1):
-            _missing = []
-            for _chk_date in _sensing_dates_list:
-                _chk_year_dir = os.path.join(base_output_dir, _chk_date[:4])
-                _chk_date_dir = os.path.join(_chk_year_dir, _chk_date)
-                for _chk_tile in all_tiles:
-                    if not glob.glob(
-                        os.path.join(_chk_date_dir, f"*T{_chk_tile}*-scmap*.tif")
-                    ):
-                        _missing.append((_chk_tile, _chk_date))
-
-            if not _missing:
-                main_logger.info("Post-retry: todas las tile-fechas completadas.")
-                break
-
+        # ── Post-loop: report any tile-dates that have no output TIF ────────────
+        _missing_report = []
+        for _chk_date in _sensing_dates_list:
+            _chk_date_dir = os.path.join(base_output_dir, _chk_date[:4], _chk_date)
+            for _chk_tile in all_tiles:
+                if not glob.glob(
+                    os.path.join(_chk_date_dir, f"*T{_chk_tile}*-scmap*.tif")
+                ):
+                    _missing_report.append(f"{_chk_tile}/{_chk_date}")
+        if _missing_report:
             main_logger.info(
-                f"Post-retry pass {_post_pass}/{_post_max_passes}: "
-                f"{len(_missing)} tile-fecha(s) pendiente(s) — "
-                f"esperando {_post_delay_s//60} min antes de reintentar..."
+                f"Tile-fechas sin TIF de salida ({len(_missing_report)}): "
+                + "  ".join(_missing_report)
             )
-            time.sleep(_post_delay_s)
-
-            for _pt, _pd in _missing:
-                _py = _pd[:4]
-                _pyd = os.path.join(base_output_dir, _py)
-                _pdd = os.path.join(_pyd, _pd)
-                os.makedirs(_pdd, exist_ok=True)
-
-                # clean any partial intermediate folders before retrying
-                for _pfx in ("0_S2L1C_Products", "1_Atmospheric_Corrected_Products",
-                             "2_Masked_Products"):
-                    _d = os.path.join(base_output_dir, f"{_pfx}_{_pt}_{_pd}")
-                    if os.path.exists(_d):
-                        _shutil_orch.rmtree(_d, ignore_errors=True)
-
-                _wait_for_ram(f"{_pt}/{_pd}")
-                main_logger.info(
-                    f"  Post-retry {_pt} {_pd} (pass {_post_pass})"
-                )
-                _t0 = time.time()
-                try:
-                    _run_tile_subprocess(_pt, _pd, None)
-                    _es = time.time() - _t0
-                    grand_done += 1
-                    main_logger.info(
-                        f"  Post-retry {_pt} {_pd} DONE ({_format_elapsed(_es)})"
-                    )
-                    try:
-                        _move_and_clean(_pt, _pd, _pdd)
-                    except Exception as _ce:
-                        main_logger.info(f"  WARNING: cleanup failed {_pt}/{_pd}: {_ce}")
-                except Exception as _re:
-                    _es = time.time() - _t0
-                    main_logger.info(
-                        f"  Post-retry {_pt} {_pd} FAILED ({_format_elapsed(_es)}): {_re}"
-                    )
-                    time.sleep(300)  # 5 min before next tile after a failure
-
         else:
-            _still_missing = sum(
-                1 for _chk_date in _sensing_dates_list
-                for _chk_tile in all_tiles
-                if not glob.glob(os.path.join(
-                    base_output_dir, _chk_date[:4], _chk_date,
-                    f"*T{_chk_tile}*-scmap*.tif"
-                ))
-            )
-            main_logger.info(
-                f"Post-retry: {_post_max_passes} passes completados, "
-                f"{_still_missing} tile-fecha(s) todavía pendiente(s)."
-            )
+            main_logger.info("Todas las tile-fechas tienen TIF de salida.")
 
         # Clean shared ESA WorldCover folder after all dates are done
         esa_wc_folder = os.path.join(base_output_dir, "2-1_ESA_Worldcover")
