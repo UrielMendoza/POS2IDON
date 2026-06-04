@@ -96,9 +96,7 @@ roi = {"type":"Polygon","coordinates":[[[-87.60,19.90],[-87.60,20.45],[-86.70,20
 # Dates are grouped by actual calendar year (even if the sargassum season crosses years).
 # Results are saved to base_output_dir/YEAR/  (one subfolder per calendar year).
 sensing_dates = [
-    # 2016
-    '20160527', '20160616', '20160706',          # sargazo
-    '20161014', '20161103', '20161113',          # no sargazo
+    # 2016 — omitido (imágenes con problemas de geometría en detectores)
     # 2017
     '20170115', '20170201', '20170316',          # no sargazo
     '20170405', '20170502', '20170611',          # sargazo
